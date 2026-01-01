@@ -1,9 +1,16 @@
-import { Addon, Option, UserData, Resource, ParsedStream } from '../db';
-import { baseOptions, Preset } from './preset';
-import { Env } from '../utils';
-import { constants, ServiceId } from '../utils';
-import { StreamParser } from '../parser';
-import { Stream } from '../db';
+import {
+  Addon,
+  Option,
+  UserData,
+  Resource,
+  ParsedStream,
+} from '../db/index.js';
+import { baseOptions, Preset } from './preset.js';
+import { Env } from '../utils/index.js';
+import { constants, ServiceId } from '../utils/index.js';
+import { StreamParser } from '../parser/index.js';
+import { Stream } from '../db/index.js';
+import { validateInfoHash } from '../builtins/utils/debrid.js';
 
 class TorboxStreamParser extends StreamParser {
   override getSeeders(
@@ -24,13 +31,35 @@ class TorboxStreamParser extends StreamParser {
     stream: Stream,
     currentParsedStream: ParsedStream
   ): string | undefined {
-    return (stream as any).hash;
+    const extractInfoHashFromUrl = (url: string) => {
+      try {
+        return validateInfoHash(
+          JSON.parse(
+            Buffer.from(new URL(url).pathname.split('/')[3], 'base64').toString(
+              'utf-8'
+            )
+          )[0]
+        );
+      } catch (e) {
+        console.warn('Failed to extract info hash from url', url, e);
+        return undefined;
+      }
+    };
+    return (
+      stream.behaviorHints?.bingeGroup?.match(
+        /torbox\|([a-f0-9]{40}$)/i
+      )?.[1] ?? extractInfoHashFromUrl(stream.url ?? '')
+    );
   }
   override getInLibrary(
     stream: Stream,
     currentParsedStream: ParsedStream
   ): boolean {
-    return (stream as any).is_your_media || stream.name?.includes('Your Media');
+    return (
+      stream.name?.includes('Your Media') ||
+      stream.description?.includes('Click play to start') ||
+      false
+    );
   }
   protected override getService(
     stream: Stream,
@@ -38,7 +67,10 @@ class TorboxStreamParser extends StreamParser {
   ): ParsedStream['service'] | undefined {
     return {
       id: constants.TORBOX_SERVICE,
-      cached: (stream as any).is_cached ?? true,
+      cached:
+        ['Your Media', 'Instant'].some((str) => stream.name?.includes(str)) ||
+        stream.description?.includes('Click play to start') ||
+        false,
     };
   }
 
@@ -47,7 +79,7 @@ class TorboxStreamParser extends StreamParser {
     currentParsedStream: ParsedStream
   ): string | undefined {
     if (stream.description?.includes('Click play to start')) {
-      currentParsedStream.filename = undefined;
+      // currentParsedStream.filename = undefined;
       return 'Click play to start streaming your media';
     }
     return undefined;
@@ -89,6 +121,21 @@ export class TorboxAddonPreset extends Preset {
 
     const options: Option[] = [
       ...baseOptions('TorBox', supportedResources, Env.DEFAULT_TORBOX_TIMEOUT),
+      {
+        id: 'mediaTypes',
+        name: 'Media Types',
+        description:
+          'Limits this addon to the selected media types for streams. For example, selecting "Movie" means this addon will only be used for movie streams (if the addon supports them). Leave empty to allow all.',
+        type: 'multi-select',
+        required: false,
+        showInSimpleMode: false,
+        options: [
+          { label: 'Movie', value: 'movie' },
+          { label: 'Series', value: 'series' },
+          { label: 'Anime', value: 'anime' },
+        ],
+        default: [],
+      },
       {
         id: 'socials',
         name: '',
@@ -132,6 +179,7 @@ export class TorboxAddonPreset extends Preset {
       name: options.name || this.METADATA.NAME,
       manifestUrl: this.generateManifestUrl(userData, options),
       enabled: true,
+      mediaTypes: options.mediaTypes || [],
       resources: options.resources || this.METADATA.SUPPORTED_RESOURCES,
       timeout: options.timeout || this.METADATA.TIMEOUT,
       preset: {

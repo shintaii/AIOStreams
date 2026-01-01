@@ -4,9 +4,11 @@ import { PageWrapper } from '../shared/page-wrapper';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import { cn } from '../ui/core/styling';
 import { SettingsNavCard } from '../shared/settings-card';
+import { ImportModal } from '../shared/import-modal';
 import { useUserData } from '@/context/userData';
 import {
   FaBolt,
+  FaClock,
   FaFilm,
   FaHourglassStart,
   FaLanguage,
@@ -27,6 +29,7 @@ import {
   MdSurroundSound,
   MdTextFields,
   MdVideoLibrary,
+  MdMiscellaneousServices,
 } from 'react-icons/md';
 import { BiSolidCameraMovie } from 'react-icons/bi';
 import { SiDolby } from 'react-icons/si';
@@ -65,6 +68,8 @@ import {
   MAX_SIZE,
   MIN_SEEDERS,
   MAX_SEEDERS,
+  MIN_AGE_HOURS,
+  MAX_AGE_HOURS,
 } from '../../../../core/src/utils/constants';
 import { PageControls } from '../shared/page-controls';
 import { Switch } from '../ui/switch';
@@ -82,6 +87,19 @@ import { TbFilterCode } from 'react-icons/tb';
 import { PasswordInput } from '../ui/password-input';
 import MarkdownLite from '../shared/markdown-lite';
 import { useMode } from '@/context/mode';
+import { copyToClipboard } from '@/utils/clipboard';
+
+/**
+ * Formats age in hours to a human-readable string.
+ * Shows hours if < 24, otherwise shows days.
+ */
+function formatAgeDisplay(hours: number): string {
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
 
 type Resolution = (typeof RESOLUTIONS)[number];
 type Quality = (typeof QUALITIES)[number];
@@ -300,6 +318,10 @@ function Content() {
                 <MdPerson className="text-lg mr-3" />
                 Seeders
               </TabsTrigger>
+              <TabsTrigger value="age">
+                <FaClock className="text-lg mr-3" />
+                Age
+              </TabsTrigger>
               {mode === 'pro' && (
                 <>
                   <TabsTrigger value="title-matching">
@@ -339,6 +361,10 @@ function Content() {
               <TabsTrigger value="deduplicator">
                 <MdCleaningServices className="text-lg mr-3" />
                 Deduplicator
+              </TabsTrigger>
+              <TabsTrigger value="miscellaneous">
+                <MdMiscellaneousServices className="text-lg mr-3" />
+                Miscellaneous
               </TabsTrigger>
             </div>
           </SettingsNavCard>
@@ -1184,6 +1210,299 @@ function Content() {
               </SettingsCard>
             </>
           </TabsContent>
+          <TabsContent value="age" className="space-y-4">
+            <>
+              <HeadingWithPageControls heading="Age" />
+              <SettingsCard
+                title="Age Filters"
+                description="Configure required, excluded, and included age ranges (in hours since upload)"
+              >
+                <div className="space-y-4">
+                  <div className="space-y-6">
+                    <div className="flex flex-col md:flex-row gap-4">
+                      <div className="flex-1 min-w-0">
+                        <Slider
+                          min={MIN_AGE_HOURS}
+                          max={MAX_AGE_HOURS}
+                          step={24}
+                          defaultValue={[MIN_AGE_HOURS, MAX_AGE_HOURS]}
+                          value={
+                            userData.requiredAgeRange || [
+                              MIN_AGE_HOURS,
+                              MAX_AGE_HOURS,
+                            ]
+                          }
+                          onValueChange={(newValue) =>
+                            newValue !== undefined &&
+                            newValue?.[0] !== undefined &&
+                            newValue?.[1] !== undefined &&
+                            setUserData((prev) => ({
+                              ...prev,
+                              requiredAgeRange: [newValue[0], newValue[1]],
+                            }))
+                          }
+                          minStepsBetweenThumbs={1}
+                          label="Required Age Range"
+                          help="Streams with age outside this range will be excluded"
+                        />
+                        <div className="flex justify-between mt-1 text-xs text-[--muted]">
+                          <span>
+                            {formatAgeDisplay(
+                              userData.requiredAgeRange?.[0] || MIN_AGE_HOURS
+                            )}
+                          </span>
+                          <span>
+                            {formatAgeDisplay(
+                              userData.requiredAgeRange?.[1] || MAX_AGE_HOURS
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 md:w-[240px] shrink-0">
+                        <NumberInput
+                          label="Min"
+                          step={24}
+                          value={
+                            userData.requiredAgeRange?.[0] || MIN_AGE_HOURS
+                          }
+                          min={MIN_AGE_HOURS}
+                          max={userData.requiredAgeRange?.[1] || MAX_AGE_HOURS}
+                          onValueChange={(newValue) =>
+                            newValue !== undefined &&
+                            setUserData((prev) => ({
+                              ...prev,
+                              requiredAgeRange: [
+                                newValue,
+                                prev.requiredAgeRange?.[1] || MAX_AGE_HOURS,
+                              ],
+                            }))
+                          }
+                        />
+                        <NumberInput
+                          label="Max"
+                          step={24}
+                          value={
+                            userData.requiredAgeRange?.[1] || MAX_AGE_HOURS
+                          }
+                          min={userData.requiredAgeRange?.[0] || MIN_AGE_HOURS}
+                          max={MAX_AGE_HOURS}
+                          onValueChange={(newValue) =>
+                            newValue !== undefined &&
+                            setUserData((prev) => ({
+                              ...prev,
+                              requiredAgeRange: [
+                                prev.requiredAgeRange?.[0] || MIN_AGE_HOURS,
+                                newValue,
+                              ],
+                            }))
+                          }
+                        />
+                      </div>
+                    </div>
+
+                    {mode === 'pro' && (
+                      <>
+                        <div className="flex flex-col md:flex-row gap-4">
+                          <div className="flex-1 min-w-0">
+                            <Slider
+                              min={MIN_AGE_HOURS}
+                              max={MAX_AGE_HOURS}
+                              step={24}
+                              defaultValue={[MIN_AGE_HOURS, MAX_AGE_HOURS]}
+                              value={
+                                userData.excludeAgeRange || [
+                                  MIN_AGE_HOURS,
+                                  MAX_AGE_HOURS,
+                                ]
+                              }
+                              onValueChange={(newValue) =>
+                                newValue !== undefined &&
+                                newValue?.[0] !== undefined &&
+                                newValue?.[1] !== undefined &&
+                                setUserData((prev) => ({
+                                  ...prev,
+                                  excludeAgeRange: [newValue[0], newValue[1]],
+                                }))
+                              }
+                              minStepsBetweenThumbs={1}
+                              label="Excluded Age Range"
+                              help="Streams with age in this range will be excluded"
+                            />
+                            <div className="flex justify-between mt-1 text-xs text-[--muted]">
+                              <span>
+                                {formatAgeDisplay(
+                                  userData.excludeAgeRange?.[0] || MIN_AGE_HOURS
+                                )}
+                              </span>
+                              <span>
+                                {formatAgeDisplay(
+                                  userData.excludeAgeRange?.[1] || MAX_AGE_HOURS
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex gap-2 md:w-[240px] shrink-0">
+                            <NumberInput
+                              label="Min"
+                              step={24}
+                              value={
+                                userData.excludeAgeRange?.[0] || MIN_AGE_HOURS
+                              }
+                              min={MIN_AGE_HOURS}
+                              max={
+                                userData.excludeAgeRange?.[1] || MAX_AGE_HOURS
+                              }
+                              onValueChange={(newValue) =>
+                                newValue !== undefined &&
+                                setUserData((prev) => ({
+                                  ...prev,
+                                  excludeAgeRange: [
+                                    newValue,
+                                    prev.excludeAgeRange?.[1] || MAX_AGE_HOURS,
+                                  ],
+                                }))
+                              }
+                            />
+                            <NumberInput
+                              label="Max"
+                              step={24}
+                              value={
+                                userData.excludeAgeRange?.[1] || MAX_AGE_HOURS
+                              }
+                              min={
+                                userData.excludeAgeRange?.[0] || MIN_AGE_HOURS
+                              }
+                              max={MAX_AGE_HOURS}
+                              onValueChange={(newValue) =>
+                                newValue !== undefined &&
+                                setUserData((prev) => ({
+                                  ...prev,
+                                  excludeAgeRange: [
+                                    prev.excludeAgeRange?.[0] || MIN_AGE_HOURS,
+                                    newValue,
+                                  ],
+                                }))
+                              }
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col md:flex-row gap-4">
+                          <div className="flex-1 min-w-0">
+                            <Slider
+                              min={MIN_AGE_HOURS}
+                              max={MAX_AGE_HOURS}
+                              step={24}
+                              defaultValue={[MIN_AGE_HOURS, MAX_AGE_HOURS]}
+                              value={
+                                userData.includeAgeRange || [
+                                  MIN_AGE_HOURS,
+                                  MAX_AGE_HOURS,
+                                ]
+                              }
+                              onValueChange={(newValue) =>
+                                newValue !== undefined &&
+                                newValue?.[0] !== undefined &&
+                                newValue?.[1] !== undefined &&
+                                setUserData((prev) => ({
+                                  ...prev,
+                                  includeAgeRange: [newValue[0], newValue[1]],
+                                }))
+                              }
+                              minStepsBetweenThumbs={1}
+                              label="Included Age Range"
+                              help="Streams with age in this range will be included even if they would be excluded otherwise"
+                            />
+                            <div className="flex justify-between mt-1 text-xs text-[--muted]">
+                              <span>
+                                {formatAgeDisplay(
+                                  userData.includeAgeRange?.[0] || MIN_AGE_HOURS
+                                )}
+                              </span>
+                              <span>
+                                {formatAgeDisplay(
+                                  userData.includeAgeRange?.[1] || MAX_AGE_HOURS
+                                )}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex gap-2 md:w-[240px] shrink-0">
+                            <NumberInput
+                              label="Min"
+                              step={24}
+                              value={
+                                userData.includeAgeRange?.[0] || MIN_AGE_HOURS
+                              }
+                              min={MIN_AGE_HOURS}
+                              max={
+                                userData.includeAgeRange?.[1] || MAX_AGE_HOURS
+                              }
+                              onValueChange={(newValue) =>
+                                newValue !== undefined &&
+                                setUserData((prev) => ({
+                                  ...prev,
+                                  includeAgeRange: [
+                                    newValue,
+                                    prev.includeAgeRange?.[1] || MAX_AGE_HOURS,
+                                  ],
+                                }))
+                              }
+                            />
+                            <NumberInput
+                              label="Max"
+                              step={24}
+                              value={
+                                userData.includeAgeRange?.[1] || MAX_AGE_HOURS
+                              }
+                              min={
+                                userData.includeAgeRange?.[0] || MIN_AGE_HOURS
+                              }
+                              max={MAX_AGE_HOURS}
+                              onValueChange={(newValue) =>
+                                newValue !== undefined &&
+                                setUserData((prev) => ({
+                                  ...prev,
+                                  includeAgeRange: [
+                                    prev.includeAgeRange?.[0] || MIN_AGE_HOURS,
+                                    newValue,
+                                  ],
+                                }))
+                              }
+                            />
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="space-y-4">
+                    <Combobox
+                      label="Stream Types"
+                      emptyMessage="There aren't any stream types to choose from..."
+                      options={['debrid', 'usenet', 'p2p'].map((type) => ({
+                        label: type,
+                        value: type,
+                      }))}
+                      defaultValue={['usenet']}
+                      value={userData.ageRangeTypes || ['usenet']}
+                      onValueChange={(value) => {
+                        setUserData((prev) => ({
+                          ...prev,
+                          ageRangeTypes: value as (
+                            | 'debrid'
+                            | 'usenet'
+                            | 'p2p'
+                          )[],
+                        }));
+                      }}
+                      help="Stream types that will use the age ranges defined above. Leave blank to apply to all stream types."
+                      multiple
+                    />
+                  </div>
+                </div>
+              </SettingsCard>
+            </>
+          </TabsContent>
           <TabsContent value="title-matching" className="space-y-4">
             <>
               <HeadingWithPageControls heading="Matching" />
@@ -1231,6 +1550,56 @@ function Content() {
                       }));
                     }}
                   />
+
+                  <div className="flex gap-4">
+                    <div className="flex-1">
+                      <Slider
+                        label="Similarity Threshold"
+                        help="The minimum similarity threshold required for a title to be considered a match. Lower values allow more leniency whereas higher values are more strict."
+                        moreHelp="The similarity is calculated using the Levenshtein distance algorithm."
+                        disabled={!userData.titleMatching?.enabled}
+                        value={[
+                          userData.titleMatching?.similarityThreshold ?? 0.85,
+                        ]}
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        defaultValue={[0.85]}
+                        onValueChange={(value) => {
+                          setUserData((prev) => ({
+                            ...prev,
+                            titleMatching: {
+                              ...prev.titleMatching,
+                              similarityThreshold: value[0],
+                            },
+                          }));
+                        }}
+                      />
+                    </div>
+                    <div className="w-24">
+                      <NumberInput
+                        label="Value"
+                        step={0.01}
+                        value={
+                          userData.titleMatching?.similarityThreshold ?? 0.85
+                        }
+                        min={0}
+                        max={1}
+                        disabled={!userData.titleMatching?.enabled}
+                        onValueChange={(newValue) => {
+                          if (newValue !== undefined) {
+                            setUserData((prev) => ({
+                              ...prev,
+                              titleMatching: {
+                                ...prev.titleMatching,
+                                similarityThreshold: newValue,
+                              },
+                            }));
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
 
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1297,6 +1666,21 @@ function Content() {
                           ...prev.yearMatching,
                           enabled: value,
                         },
+                      }));
+                    }}
+                  />
+
+                  <Switch
+                    label="Strict"
+                    side="right"
+                    help="Filter out streams for movies that don't have a year specified."
+                    moreHelp="Disabling this will allow streams without a year to be included in the results."
+                    disabled={!userData.yearMatching?.enabled}
+                    value={userData.yearMatching?.strict ?? true}
+                    onValueChange={(value) => {
+                      setUserData((prev) => ({
+                        ...prev,
+                        yearMatching: { ...prev.yearMatching, strict: value },
                       }));
                     }}
                   />
@@ -1383,6 +1767,24 @@ function Content() {
                         seasonEpisodeMatching: {
                           ...(prev.seasonEpisodeMatching || {}),
                           enabled: value,
+                        },
+                      }));
+                    }}
+                  />
+
+                  <Switch
+                    label="Strict"
+                    side="right"
+                    help="Filter out streams for series that don't have any season or episode specified."
+                    moreHelp="Disabling this will allow streams without a season or episode to be included in the results."
+                    disabled={!userData.seasonEpisodeMatching?.enabled}
+                    value={userData.seasonEpisodeMatching?.strict ?? false}
+                    onValueChange={(value) => {
+                      setUserData((prev) => ({
+                        ...prev,
+                        seasonEpisodeMatching: {
+                          ...prev.seasonEpisodeMatching,
+                          strict: value,
                         },
                       }));
                     }}
@@ -1957,17 +2359,18 @@ function Content() {
               <HeadingWithPageControls heading="Size" />
               <div className="mb-4">
                 <p className="text-sm text-[--muted]">
-                  Set minimum and maximum size limits for movies and series. You
-                  can set a global limit, and also choose to set specific limits
-                  for each resolution. For a given stream, only one set of size
-                  filters would be used. A resolution specific limit takes
-                  priority.
+                  Set minimum and maximum size limits for movies, series, and
+                  anime series. You can set a global limit, and also choose to
+                  set specific limits for each resolution. For a given stream,
+                  only one set of size filters would be used. A resolution
+                  specific limit takes priority. Anime series limits take
+                  precedence over regular series limits.
                 </p>
               </div>
               <div className="space-y-4">
                 <SettingsCard
                   title="Global"
-                  description="Apply size filters for movies and series"
+                  description="Apply size filters for movies, series, and anime series"
                 >
                   <SizeRangeSlider
                     label="Global Size Limits"
@@ -1977,6 +2380,9 @@ function Content() {
                     }
                     seriesValue={
                       userData.size?.global?.series || [MIN_SIZE, MAX_SIZE]
+                    }
+                    animeValue={
+                      userData.size?.global?.anime || [MIN_SIZE, MAX_SIZE]
                     }
                     onMoviesChange={(value) => {
                       setUserData((prev: any) => ({
@@ -1993,6 +2399,15 @@ function Content() {
                         size: {
                           ...prev.size,
                           global: { ...prev.size?.global, series: value },
+                        },
+                      }));
+                    }}
+                    onAnimeChange={(value) => {
+                      setUserData((prev: any) => ({
+                        ...prev,
+                        size: {
+                          ...prev.size,
+                          global: { ...prev.size?.global, anime: value },
                         },
                       }));
                     }}
@@ -2022,6 +2437,12 @@ function Content() {
                               MAX_SIZE,
                             ]
                           }
+                          animeValue={
+                            userData.size?.resolution?.[resolution]?.anime || [
+                              MIN_SIZE,
+                              MAX_SIZE,
+                            ]
+                          }
                           onMoviesChange={(value) => {
                             setUserData((prev: any) => ({
                               ...prev,
@@ -2047,6 +2468,21 @@ function Content() {
                                   [resolution]: {
                                     ...prev.size?.resolution?.[resolution],
                                     series: value,
+                                  },
+                                },
+                              },
+                            }));
+                          }}
+                          onAnimeChange={(value) => {
+                            setUserData((prev: any) => ({
+                              ...prev,
+                              size: {
+                                ...prev.size,
+                                resolution: {
+                                  ...prev.size?.resolution,
+                                  [resolution]: {
+                                    ...prev.size?.resolution?.[resolution],
+                                    anime: value,
                                   },
                                 },
                               },
@@ -2215,6 +2651,7 @@ function Content() {
                     }}
                   />
                 </SettingsCard>
+
                 {mode === 'pro' && (
                   <>
                     <SettingsCard
@@ -2359,6 +2796,30 @@ function Content() {
                         }))}
                       />
 
+                      <Combobox
+                        help="Addons selected here will always have their results kept during deduplication."
+                        label="Addon Exclusions"
+                        value={userData.deduplicator?.excludeAddons ?? []}
+                        onValueChange={(value) => {
+                          setUserData((prev) => ({
+                            ...prev,
+                            deduplicator: {
+                              ...prev.deduplicator,
+                              excludeAddons: value,
+                            },
+                          }));
+                        }}
+                        options={userData.presets.map((preset) => ({
+                          label: preset.options.name || preset.type,
+                          value: preset.instanceId,
+                          textValue: preset.options.name,
+                        }))}
+                        emptyMessage="You haven't installed any addons..."
+                        placeholder="Select addons..."
+                        multiple
+                        disabled={userData.deduplicator?.enabled === false}
+                      />
+
                       <Select
                         label="Multi-Group Behaviour"
                         help={`Configure how duplicates across multiple types are handled. e.g. if a given duplicate set has both cached and uncached streams, what should be done.
@@ -2389,6 +2850,76 @@ function Content() {
                       />
                     </SettingsCard>
                   </>
+                )}
+              </div>
+            </>
+          </TabsContent>
+          <TabsContent value="miscellaneous" className="space-y-4">
+            <>
+              <HeadingWithPageControls heading="Miscellaneous" />
+              <div className="mb-4">
+                <p className="text-sm text-[--muted]">
+                  Additional miscellaneous filters.
+                </p>
+              </div>
+              <div className="space-y-4">
+                {/* <SettingsCard>
+                  <Switch
+                    label="Enable"
+                    side="right"
+                    value={userData.miscellaneous?.enabled ?? false}
+                  />
+                </SettingsCard> */}
+                <SettingsCard
+                  title="Digital Release Filter"
+                  description="This will filter out all results for movies that are determined to not have a digital release."
+                >
+                  <Switch
+                    label="Enable"
+                    side="right"
+                    value={userData.digitalReleaseFilter}
+                    onValueChange={(value) => {
+                      setUserData((prev) => ({
+                        ...prev,
+                        digitalReleaseFilter: value,
+                      }));
+                    }}
+                  />
+                </SettingsCard>
+                <SettingsCard
+                  title="SeaDex Integration"
+                  description="Fetch SeaDex data (releases.moe) for anime to identify best quality releases."
+                >
+                  <Switch
+                    label="Enable"
+                    side="right"
+                    value={userData.enableSeadex}
+                    onValueChange={(value) => {
+                      setUserData((prev) => ({
+                        ...prev,
+                        enableSeadex: value,
+                      }));
+                    }}
+                  />
+                </SettingsCard>
+                {/* Only show this setting if its enabled, otherwise hide it. */}
+                {mode === 'pro' && userData.excludeSeasonPacks && (
+                  <SettingsCard
+                    title="Exclude Season Packs"
+                    description="Whether to filter out results that contain entire seasons."
+                  >
+                    <Switch
+                      label="Enable"
+                      side="right"
+                      value={userData.excludeSeasonPacks}
+                      onValueChange={(value) => {
+                        setUserData((prev) => ({
+                          ...prev,
+                          excludeSeasonPacks: value,
+                        }));
+                      }}
+                    />
+                  </SettingsCard>
                 )}
               </div>
             </>
@@ -2449,10 +2980,11 @@ function Content() {
                       size="sm"
                       intent="primary-subtle"
                       icon={<FaRegCopy />}
-                      onClick={() => {
-                        navigator.clipboard.writeText(url);
-                        toast.success('URL copied to clipboard');
-                      }}
+                      onClick={() =>
+                        copyToClipboard(url, {
+                          successMessage: 'URL copied to clipboard',
+                        })
+                      }
                     />
                   </div>
                 )
@@ -3041,133 +3573,15 @@ function TwoTextInputs({
   );
 }
 
-function ImportModal({
-  open,
-  onOpenChange,
-  onImport,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onImport: (data: any) => void;
-}) {
-  const [isLoading, setIsLoading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const urlModalDisclosure = useDisclosure(false);
-  const [url, setUrl] = useState('');
-
-  const handleFileImport = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const content = e.target?.result as string;
-        const data = JSON.parse(content);
-        onImport(data);
-        onOpenChange(false);
-      } catch (error) {
-        console.error('Error importing file:', error);
-        toast.error('Failed to parse JSON file');
-      }
-    };
-    reader.readAsText(file);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
-  const handleUrlImport = async () => {
-    if (!url) {
-      toast.error('Please enter a URL');
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error('Failed to fetch URL');
-      }
-      const data = await response.json();
-      onImport(data);
-      urlModalDisclosure.close();
-      onOpenChange(false);
-    } catch (error) {
-      console.error('Error importing from URL:', error);
-      toast.error('Failed to import from URL');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <>
-      <Modal open={open} onOpenChange={onOpenChange} title="Import">
-        <div className="space-y-4">
-          <div className="flex flex-col gap-4">
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileImport}
-              accept=".json"
-              className="hidden"
-            />
-            <Button
-              intent="primary"
-              onClick={() => fileInputRef.current?.click()}
-              className="w-full"
-            >
-              Import from File
-            </Button>
-            <Button
-              intent="primary"
-              onClick={urlModalDisclosure.open}
-              className="w-full"
-            >
-              Import from URL
-            </Button>
-          </div>
-        </div>
-      </Modal>
-
-      <Modal
-        open={urlModalDisclosure.isOpen}
-        onOpenChange={urlModalDisclosure.close}
-        title="Import from URL"
-      >
-        <div className="space-y-4">
-          <TextInput
-            label="URL"
-            value={url}
-            onValueChange={setUrl}
-            placeholder="Enter URL to JSON file"
-          />
-          <div className="flex justify-end gap-2">
-            <Button intent="primary-outline" onClick={urlModalDisclosure.close}>
-              Cancel
-            </Button>
-            <Button
-              intent="primary"
-              onClick={handleUrlImport}
-              loading={isLoading}
-            >
-              Import
-            </Button>
-          </div>
-        </div>
-      </Modal>
-    </>
-  );
-}
-
 interface SizeRangeSliderProps {
   label: string;
   help?: string;
   moviesValue: [number, number];
   seriesValue: [number, number];
+  animeValue: [number, number];
   onMoviesChange: (value: [number, number]) => void;
   onSeriesChange: (value: [number, number]) => void;
+  onAnimeChange: (value: [number, number]) => void;
   min?: number;
   max?: number;
 }
@@ -3185,8 +3599,10 @@ function SizeRangeSlider({
   help,
   moviesValue,
   seriesValue,
+  animeValue,
   onMoviesChange,
   onSeriesChange,
+  onAnimeChange,
   min = MIN_SIZE,
   max = MAX_SIZE,
 }: SizeRangeSliderProps) {
@@ -3294,6 +3710,59 @@ function SizeRangeSlider({
               onValueChange={(newValue) =>
                 newValue !== undefined &&
                 onSeriesChange([seriesValue[0], newValue])
+              }
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Anime Series Slider */}
+      <div className="space-y-2">
+        <h5 className="text-sm font-medium text-[--muted]">Anime Series</h5>
+        <div className="flex flex-col md:flex-row gap-4">
+          <div className="flex-1 min-w-0">
+            <Slider
+              min={min}
+              max={max}
+              step={max / 1000}
+              defaultValue={[min, max]}
+              value={animeValue}
+              onValueChange={(newValue) =>
+                newValue !== undefined &&
+                newValue?.[0] !== undefined &&
+                newValue?.[1] !== undefined &&
+                onAnimeChange([newValue[0], newValue[1]])
+              }
+              minStepsBetweenThumbs={1}
+              label="Anime Series Size Range"
+              help={help}
+            />
+            <div className="flex justify-between mt-1 text-xs text-[--muted]">
+              <span>{formatBytes(animeValue[0])}</span>
+              <span>{formatBytes(animeValue[1])}</span>
+            </div>
+          </div>
+          <div className="flex gap-2 md:w-[240px] shrink-0">
+            <NumberInput
+              label="Min"
+              step={max / 1000}
+              value={animeValue[0]}
+              min={min}
+              max={animeValue[1]}
+              onValueChange={(newValue) =>
+                newValue !== undefined &&
+                onAnimeChange([newValue, animeValue[1]])
+              }
+            />
+            <NumberInput
+              label="Max"
+              step={max / 1000}
+              value={animeValue[1]}
+              min={animeValue[0]}
+              max={max}
+              onValueChange={(newValue) =>
+                newValue !== undefined &&
+                onAnimeChange([animeValue[0], newValue])
               }
             />
           </div>

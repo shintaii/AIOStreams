@@ -10,7 +10,9 @@ import {
   debridApi,
   searchApi,
   animeApi,
-} from './routes/api';
+  proxyApi,
+  templatesApi,
+} from './routes/api/index.js';
 import {
   configure,
   manifest,
@@ -20,14 +22,17 @@ import {
   subtitle,
   addonCatalog,
   alias,
-} from './routes/stremio';
+} from './routes/stremio/index.js';
 import {
   gdrive,
   torboxSearch,
   torznab,
   newznab,
   prowlarr,
-} from './routes/builtins';
+  knaben,
+  torrentGalaxy,
+  easynews,
+} from './routes/builtins/index.js';
 import {
   ipMiddleware,
   loggerMiddleware,
@@ -37,28 +42,35 @@ import {
   staticRateLimiter,
   internalMiddleware,
   stremioStreamRateLimiter,
-} from './middlewares';
+} from './middlewares/index.js';
 
 import { constants, createLogger, Env } from '@aiostreams/core';
 import { StremioTransformer } from '@aiostreams/core';
-import { createResponse } from './utils/responses';
+import { createResponse } from './utils/responses.js';
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'url';
 const app: Express = express();
 const logger = createLogger('server');
 
+export enum StaticFiles {
+  DOWNLOAD_FAILED = 'download_failed.mp4',
+  DOWNLOADING = 'downloading.mp4',
+  UNAVAILABLE_FOR_LEGAL_REASONS = 'unavailable_for_legal_reasons.mp4',
+  STORE_LIMIT_EXCEEDED = 'store_limit_exceeded.mp4',
+  CONTENT_PROXY_LIMIT_REACHED = 'content_proxy_limit_reached.mp4',
+  INTERNAL_SERVER_ERROR = '500.mp4',
+  FORBIDDEN = '403.mp4',
+  UNAUTHORIZED = '401.mp4',
+  NO_MATCHING_FILE = 'no_matching_file.mp4',
+  PAYMENT_REQUIRED = 'payment_required.mp4',
+}
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 export const frontendRoot = path.join(__dirname, '../../frontend/out');
 export const staticRoot = path.join(__dirname, './static');
-export const STATIC_DOWNLOAD_FAILED = 'download_failed.mp4';
-export const STATIC_DOWNLOADING = 'downloading.mp4';
-export const STATIC_UNAVAILABLE_FOR_LEGAL_REASONS =
-  'unavailable_for_legal_reasons.mp4';
-export const STATIC_CONTENT_PROXY_LIMIT_REACHED =
-  'content_proxy_limit_reached.mp4';
-export const STATIC_INTERNAL_SERVER_ERROR = '500.mp4';
-export const STATIC_FORBIDDEN = '403.mp4';
-export const STATIC_UNAUTHORIZED = '401.mp4';
-export const STATIC_NO_MATCHING_FILE = 'no_matching_file.mp4';
 
 app.use(ipMiddleware);
 app.use(loggerMiddleware);
@@ -85,6 +97,8 @@ if (Env.ENABLE_SEARCH_API) {
   apiRouter.use('/search', searchApi);
 }
 apiRouter.use('/anime', animeApi);
+apiRouter.use('/proxy', proxyApi);
+apiRouter.use('/templates', templatesApi);
 app.use(`/api/v${constants.API_VERSION}`, apiRouter);
 
 // Stremio Routes
@@ -125,14 +139,40 @@ builtinsRouter.use('/torbox-search', torboxSearch);
 builtinsRouter.use('/torznab', torznab);
 builtinsRouter.use('/newznab', newznab);
 builtinsRouter.use('/prowlarr', prowlarr);
+builtinsRouter.use('/knaben', knaben);
+builtinsRouter.use('/torrent-galaxy', torrentGalaxy);
+builtinsRouter.use('/easynews', easynews);
 app.use('/builtins', builtinsRouter);
 
+app.get('/logo.png', staticRateLimiter, (req, res, next) => {
+  const filePath = path.resolve(
+    frontendRoot,
+    Env.ALTERNATE_DESIGN ? 'logo_alt.png' : 'logo.png'
+  );
+  if (filePath.startsWith(frontendRoot) && fs.existsSync(filePath)) {
+    res.sendFile(filePath);
+    return;
+  }
+  next();
+});
 app.get(
-  ['/_next/*any', '/assets/*any', '/favicon.ico', '/logo.png'],
+  [
+    '/_next/*any',
+    '/assets/*any',
+    '/favicon.ico',
+    '/manifest.json',
+    '/web-app-manifest-192x192.png',
+    '/web-app-manifest-512x512.png',
+    '/apple-icon.png',
+    '/mini-nightly-white.png',
+    '/mini-stable-white.png',
+    '/icon0.svg',
+    '/icon1.png',
+  ],
   staticRateLimiter,
   (req, res, next) => {
     const filePath = path.resolve(frontendRoot, req.path.replace(/^\//, ''));
-    if (filePath.startsWith(frontendRoot)) {
+    if (filePath.startsWith(frontendRoot) && fs.existsSync(filePath)) {
       res.sendFile(filePath);
       return;
     }
@@ -140,7 +180,7 @@ app.get(
   }
 );
 
-app.get('/static/*any', (req, res, next) => {
+app.get('/static/*any', corsMiddleware, (req, res, next) => {
   const filePath = path.resolve(
     staticRoot,
     req.path.replace(/^\/static\//, '')

@@ -20,6 +20,11 @@ import { CopyIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { NumberInput } from '../ui/number-input';
 import { PageControls } from '../shared/page-controls';
+import { Tooltip } from '../ui/tooltip';
+import { FaFileImport, FaFileExport } from 'react-icons/fa';
+import { IconButton } from '../ui/button';
+import { ImportModal } from '../shared/import-modal';
+import { copyToClipboard } from '@/utils/clipboard';
 const formatterChoices = Object.values(constants.FORMATTER_DETAILS);
 
 // Remove the throttle utility and replace with FormatQueue
@@ -95,12 +100,45 @@ function FormatterPreviewBox({
 
 function Content() {
   const { userData, setUserData } = useUserData();
+  const importModalDisclosure = useDisclosure(false);
 
   const [formattedStream, setFormattedStream] = useState<{
     name: string;
     description: string;
   } | null>(null);
   const [isFormatting, setIsFormatting] = useState(false);
+
+  const handleImport = (data: any) => {
+    if (typeof data.name === 'string' && typeof data.description === 'string') {
+      handleFormatterChange(
+        constants.CUSTOM_FORMATTER,
+        data.name,
+        data.description
+      );
+      toast.success('Formatter imported successfully');
+    } else {
+      toast.error('Invalid formatter format');
+    }
+  };
+
+  const handleExport = () => {
+    const data = {
+      name: userData.formatter.definition?.name || '',
+      description: userData.formatter.definition?.description || '',
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'custom-formatter.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast.success('Formatter exported successfully');
+  };
 
   // Create format queue ref to persist between renders
   const formatQueueRef = React.useRef<FormatQueue>(new FormatQueue(200));
@@ -123,6 +161,7 @@ function Content() {
   const [type, setType] =
     useState<(typeof constants.STREAM_TYPES)[number]>('debrid');
   const [library, setLibrary] = useState(false);
+  const [privateTorrent, setPrivateTorrent] = useState(false);
   const [duration, setDuration] = useState<number | undefined>(9120000); // 2h 32m in milliseconds
   const [fileSize, setFileSize] = useState<number | undefined>(62500000000); // 58.2 GB in bytes
   const [folderSize, setFolderSize] = useState<number | undefined>(
@@ -153,6 +192,28 @@ function Content() {
     }));
   };
 
+  function parseAgeToHours(ageString: string): number | undefined {
+    const match = ageString.match(/^(\d+)([a-zA-Z])$/);
+    if (!match) {
+      return undefined;
+    }
+
+    const value = parseInt(match[1], 10);
+    const unit = match[2].toLowerCase();
+
+    switch (unit) {
+      case 'd':
+        return value * 24;
+      case 'h':
+        return value;
+      case 'm':
+        return value / 60;
+      case 'y':
+        return value * 24 * 365;
+      default:
+        return undefined;
+    }
+  }
   const formatStream = useCallback(async () => {
     if (isFormatting) return;
 
@@ -186,6 +247,7 @@ function Content() {
         torrent: {
           infoHash: type === 'p2p' ? '1234567890' : undefined,
           seeders,
+          private: privateTorrent,
         },
         service:
           providerId === 'none'
@@ -194,7 +256,7 @@ function Content() {
                 id: providerId,
                 cached: isCached,
               },
-        age,
+        age: parseAgeToHours(age),
         duration,
         size: fileSize,
         proxied,
@@ -222,6 +284,7 @@ function Content() {
     isCached,
     type,
     library,
+    privateTorrent,
     duration,
     fileSize,
     folderSize,
@@ -245,6 +308,7 @@ function Content() {
     isCached,
     type,
     library,
+    privateTorrent,
     duration,
     fileSize,
     folderSize,
@@ -345,7 +409,37 @@ function Content() {
                 placeholder="Enter a template for the stream description"
               />
             </div>
-            <SnippetsButton />
+            <div className="flex gap-2 items-center">
+              <SnippetsButton />
+              <div className="ml-auto flex gap-2">
+                <Tooltip
+                  trigger={
+                    <IconButton
+                      rounded
+                      size="sm"
+                      intent="primary-subtle"
+                      icon={<FaFileImport />}
+                      onClick={importModalDisclosure.open}
+                    />
+                  }
+                >
+                  Import
+                </Tooltip>
+                <Tooltip
+                  trigger={
+                    <IconButton
+                      rounded
+                      size="sm"
+                      intent="primary-subtle"
+                      icon={<FaFileExport />}
+                      onClick={handleExport}
+                    />
+                  }
+                >
+                  Export
+                </Tooltip>
+              </div>
+            </div>
           </div>
         </SettingsCard>
       )}
@@ -495,6 +589,11 @@ function Content() {
               onValueChange={setLibrary}
             />
             <Switch
+              label={<span className="truncate block">Private</span>}
+              value={privateTorrent}
+              onValueChange={setPrivateTorrent}
+            />
+            <Switch
               label={<span className="truncate block">Proxied</span>}
               value={proxied}
               onValueChange={setProxied}
@@ -502,6 +601,12 @@ function Content() {
           </div>
         </div>
       </SettingsCard>
+
+      <ImportModal
+        open={importModalDisclosure.isOpen}
+        onOpenChange={importModalDisclosure.toggle}
+        onImport={handleImport}
+      />
     </>
   );
 }
@@ -541,22 +646,10 @@ function SnippetsButton() {
                 intent="primary-outline"
                 className="sm:ml-4 flex-shrink-0"
                 onClick={async () => {
-                  if (!navigator.clipboard) {
-                    toast.error(
-                      'The clipboard API is not available in this browser or context.'
-                    );
-                    return;
-                  }
-                  try {
-                    await navigator.clipboard.writeText(snippet.value);
-                    toast.success('Snippet copied to clipboard');
-                  } catch (error) {
-                    console.error(
-                      'Failed to copy snippet to clipboard:',
-                      error
-                    );
-                    toast.error('Failed to copy snippet to clipboard');
-                  }
+                  await copyToClipboard(snippet.value, {
+                    successMessage: 'Snippet copied to clipboard',
+                    errorMessage: 'Failed to copy snippet to clipboard',
+                  });
                 }}
                 title="Copy snippet"
               >

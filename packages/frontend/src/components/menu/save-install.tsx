@@ -2,7 +2,7 @@
 import React from 'react';
 import { Button } from '@/components/ui/button';
 import { TextInput } from '@/components/ui/text-input';
-import { useUserData } from '@/context/userData';
+import { applyMigrations, useUserData } from '@/context/userData';
 import { UserConfigAPI } from '@/services/api';
 import { PageWrapper } from '@/components/shared/page-wrapper';
 import { Alert } from '@/components/ui/alert';
@@ -11,10 +11,13 @@ import { toast } from 'sonner';
 import { CopyIcon, DownloadIcon, PlusIcon, UploadIcon } from 'lucide-react';
 import { useStatus } from '@/context/status';
 import { BiCopy } from 'react-icons/bi';
+import { copyToClipboard } from '@/utils/clipboard';
 import { PageControls } from '../shared/page-controls';
 import { useDisclosure } from '@/hooks/disclosure';
 import { Modal } from '../ui/modal';
 import { Switch } from '../ui/switch';
+import { TemplateExportModal } from '../shared/template-export-modal';
+import { ConfigTemplatesModal } from '../shared/config-templates-modal';
 import {
   Accordion,
   AccordionContent,
@@ -29,43 +32,36 @@ import {
 } from '../shared/confirmation-dialog';
 import { UserData } from '@aiostreams/core';
 
-function applyMigrations(config: any): UserData {
-  if (
-    config.deduplicator &&
-    typeof config.deduplicator.multiGroupBehaviour === 'string'
-  ) {
-    switch (config.deduplicator.multiGroupBehaviour as string) {
-      case 'remove_uncached':
-        config.deduplicator.multiGroupBehaviour = 'aggressive';
-        break;
-      case 'remove_uncached_same_service':
-        config.deduplicator.multiGroupBehaviour = 'conservative';
-        break;
-      case 'remove_nothing':
-        config.deduplicator.multiGroupBehaviour = 'keep_all';
-        break;
-    }
-  }
-  if (config.titleMatching?.matchYear) {
-    config.yearMatching = {
-      enabled: true,
-      tolerance: config.titleMatching.yearTolerance
-        ? config.titleMatching.yearTolerance
-        : 1,
-      requestTypes: config.titleMatching.requestTypes ?? [],
-      addons: config.titleMatching.addons ?? [],
-    };
-    delete config.titleMatching.matchYear;
-  }
+// Reusable modal option button component
+interface ModalOptionButtonProps {
+  onClick: () => void;
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+}
 
-  if (Array.isArray(config.groups)) {
-    config.groups = {
-      enabled: config.disableGroups ? false : true,
-      groupings: config.groups,
-      behaviour: 'parallel',
-    };
-  }
-  return config;
+function ModalOptionButton({
+  onClick,
+  icon,
+  title,
+  description,
+}: ModalOptionButtonProps) {
+  return (
+    <button
+      onClick={onClick}
+      className="group relative flex flex-col items-center gap-4 rounded-xl border-2 border-gray-700 bg-gradient-to-br from-gray-800/50 to-gray-800/30 p-6 text-center transition-all hover:border-brand-400 hover:from-brand-400/10 hover:to-brand-400/5 hover:shadow-lg hover:shadow-brand-400/20 hover:ring-1 hover:ring-brand-400 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-400"
+    >
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-brand-500 to-brand-600 text-white shadow-lg transition-transform group-hover:scale-110">
+        {icon}
+      </div>
+      <div>
+        <h3 className="text-lg font-bold text-white">{title}</h3>
+        <p className="mt-2 text-sm leading-relaxed text-gray-400">
+          {description}
+        </p>
+      </div>
+    </button>
+  );
 }
 
 export function SaveInstallMenu() {
@@ -99,11 +95,27 @@ function Content() {
   const importFileRef = React.useRef<HTMLInputElement>(null);
   const installModal = useDisclosure(false);
   const passwordModal = useDisclosure(false);
+  const deleteUserModal = useDisclosure(false);
+  const [confirmDeletionPassword, setConfirmDeletionPassword] =
+    React.useState('');
+  const { setSelectedMenu, firstMenu } = useMenu();
+  const templateExportModal = useDisclosure(false);
+  const templatesModal = useDisclosure(false);
+  const exportMenuModal = useDisclosure(false);
+  const importMenuModal = useDisclosure(false);
   const [filterCredentialsInExport, setFilterCredentialsInExport] =
     React.useState(false);
-  const deleteModal = useDisclosure(false);
-  const [deletePassword, setDeletePassword] = React.useState('');
-  const { setSelectedMenu, firstMenu } = useMenu();
+  const confirmResetProps = useConfirmationDialog({
+    title: 'Confirm Reset',
+    description: `Are you sure you want to reset your configuration? This will clear all your settings${uuid ? ` but keep your user account` : ''}. This action cannot be undone.`,
+    actionText: 'Reset',
+    actionIntent: 'alert',
+    onConfirm: () => {
+      setUserData(null);
+      setSelectedMenu(firstMenu);
+      toast.success('Configuration reset successfully');
+    },
+  });
   const confirmDelete = useConfirmationDialog({
     title: 'Confirm Deletion',
     description:
@@ -203,17 +215,16 @@ function Content() {
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const json = applyMigrations(
-          JSON.parse(event.target?.result as string)
-        );
-        // const validate = UserDataSchema.safeParse(json);
-        // if (!validate.success) {
-        //   toast.error('Failed to import configuration: Invalid JSON file');
-        //   return;
-        // }
+        const parsed = JSON.parse(event.target?.result as string);
+        if (parsed.metadata) {
+          toast.error(
+            'The imported file is a template, please use the template import option instead.'
+          );
+          return;
+        }
         setUserData((prev) => ({
           ...prev,
-          ...json,
+          ...applyMigrations(parsed),
         }));
         toast.success('Configuration imported successfully');
       } catch (err) {
@@ -223,84 +234,86 @@ function Content() {
     reader.readAsText(file);
   };
 
+  const filterCredentials = (data: UserData): UserData => {
+    const clonedData = structuredClone(data);
+
+    return {
+      ...clonedData,
+      ip: undefined,
+      uuid: undefined,
+      addonPassword: undefined,
+      tmdbAccessToken: undefined,
+      tmdbApiKey: undefined,
+      tvdbApiKey: undefined,
+      rpdbApiKey: undefined,
+      services: clonedData?.services?.map((service) => ({
+        ...service,
+        credentials: {},
+      })),
+      proxy: {
+        ...clonedData?.proxy,
+        credentials: undefined,
+        url: undefined,
+        publicUrl: undefined,
+      },
+      presets: clonedData?.presets?.map((preset) => {
+        const presetMeta = status?.settings.presets.find(
+          (p) => p.ID === preset.type
+        );
+        return {
+          ...preset,
+          options: Object.fromEntries(
+            Object.entries(preset.options || {}).filter(([key]) => {
+              const optionMeta = presetMeta?.OPTIONS?.find(
+                (opt) => opt.id === key
+              );
+              return optionMeta?.type !== 'password';
+            })
+          ),
+        };
+      }),
+    };
+  };
+
   const handleExport = () => {
     try {
-      const filteredUserData: UserData = {
-        ...userData,
-        ip: filterCredentialsInExport ? undefined : userData.ip,
-        uuid: filterCredentialsInExport ? undefined : userData.uuid,
-        addonPassword: filterCredentialsInExport
-          ? undefined
-          : userData.addonPassword,
-        tmdbAccessToken: filterCredentialsInExport
-          ? undefined
-          : userData.tmdbAccessToken,
-        tmdbApiKey: filterCredentialsInExport ? undefined : userData.tmdbApiKey,
-        rpdbApiKey: filterCredentialsInExport ? undefined : userData.rpdbApiKey,
-        services: userData?.services?.map((service) => ({
-          ...service,
-          credentials: filterCredentialsInExport ? {} : service.credentials,
-        })),
-        proxy: {
-          ...userData?.proxy,
-          credentials: filterCredentialsInExport
-            ? undefined
-            : userData?.proxy?.credentials,
-          url: filterCredentialsInExport ? undefined : userData?.proxy?.url,
-          publicUrl: filterCredentialsInExport
-            ? undefined
-            : userData?.proxy?.publicUrl,
-        },
-        presets: userData?.presets?.map((preset) => {
-          const presetMeta = status?.settings.presets.find(
-            (p) => p.ID === preset.type
-          );
-          return {
-            ...preset,
-            options: filterCredentialsInExport
-              ? Object.fromEntries(
-                  Object.entries(preset.options || {}).filter(([key]) => {
-                    const optionMeta = presetMeta?.OPTIONS?.find(
-                      (opt) => opt.id === key
-                    );
-                    return optionMeta?.type !== 'password';
-                  })
-                )
-              : preset.options,
-          };
-        }),
-      };
-      const dataStr = JSON.stringify(filteredUserData, null, 2);
+      const exportData = filterCredentialsInExport
+        ? filterCredentials(userData)
+        : structuredClone(userData);
+      const dataStr = JSON.stringify(exportData, null, 2);
       const blob = new Blob([dataStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'aiostreams-config.json';
+      // format date as YYYY-MM-DD.HH-MM-SS
+      const now = new Date();
+      const pad = (n: number) => n.toString().padStart(2, '0');
+      const formattedDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+      a.download = `aiostreams-config-${formattedDate}.json`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      toast.success('Configuration exported successfully');
+      exportMenuModal.close();
     } catch (err) {
       toast.error('Failed to export configuration');
     }
   };
-
-  const manifestUrl = `${baseUrl}/stremio/${uuid}/${encryptedPassword}/manifest.json`;
+  const uuidRegex =
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+  const manifestUrl = uuid
+    ? uuidRegex.test(uuid)
+      ? `${baseUrl}/stremio/${uuid}/${encryptedPassword}/manifest.json`
+      : `${baseUrl}/stremio/u/${uuid}/manifest.json`
+    : '';
   const encodedManifest = encodeURIComponent(manifestUrl);
 
   const copyManifestUrl = async () => {
-    try {
-      if (!navigator.clipboard) {
-        toast.error(
-          'The Clipboard API is not supported on this browser or context, please manually copy the URL'
-        );
-        return;
-      }
-      await navigator.clipboard.writeText(manifestUrl);
-      toast.success('Manifest URL copied to clipboard');
-    } catch (err) {
-      toast.error('Failed to copy manifest URL');
-    }
+    await copyToClipboard(manifestUrl, {
+      successMessage: 'Manifest URL copied to clipboard',
+      errorMessage: 'Failed to copy manifest URL',
+    });
   };
 
   const handleDelete = async () => {
@@ -310,7 +323,10 @@ function Content() {
         return;
       }
 
-      const result = await UserConfigAPI.deleteUser(uuid, deletePassword);
+      const result = await UserConfigAPI.deleteUser(
+        uuid,
+        confirmDeletionPassword
+      );
 
       if (!result.success) {
         if (result.error?.code === 'USER_INVALID_DETAILS') {
@@ -330,7 +346,7 @@ function Content() {
       setPassword(null);
       setUserData(null);
       setSelectedMenu(firstMenu);
-      deleteModal.close();
+      deleteUserModal.close();
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : 'Failed to delete configuration'
@@ -413,10 +429,11 @@ function Content() {
                         </span>
                         <BiCopy
                           className="min-h-5 min-w-5 cursor-pointer"
-                          onClick={() => {
-                            navigator.clipboard.writeText(uuid);
-                            toast.success('UUID copied to clipboard');
-                          }}
+                          onClick={() =>
+                            copyToClipboard(uuid, {
+                              successMessage: 'UUID copied to clipboard',
+                            })
+                          }
                         />
                       </div>
                       <p className="text-sm text-[--muted]">
@@ -499,13 +516,24 @@ function Content() {
                   >
                     Stremio Web
                   </Button>
-                  <Button
-                    onClick={copyManifestUrl}
-                    intent="primary"
-                    className="w-full"
-                  >
-                    Copy URL
-                  </Button>
+
+                  <div className="flex items-center gap-2 mt-2">
+                    <TextInput
+                      type="text"
+                      readOnly
+                      value={manifestUrl}
+                      className="flex-1 rounded-lg border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-brand-400"
+                      onClick={(e) => e.currentTarget.select()}
+                    />
+                    <Button
+                      onClick={copyManifestUrl}
+                      intent="primary"
+                      className="shrink-0 px-3"
+                      aria-label="Copy manifest URL"
+                    >
+                      <CopyIcon className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               </Modal>
             </SettingsCard>
@@ -546,74 +574,53 @@ function Content() {
           title="Backups"
           description="Export your settings or restore from a backup file"
         >
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             <Button
-              onClick={handleExport}
+              onClick={exportMenuModal.open}
               leftIcon={<UploadIcon />}
               intent="gray"
             >
               Export
             </Button>
-            <div>
-              <input
-                type="file"
-                accept=".json"
-                className="hidden"
-                id="import-file"
-                onChange={handleImport}
-                ref={importFileRef}
-              />
-              <label htmlFor="import-file">
-                <Button
-                  intent="gray"
-                  leftIcon={<DownloadIcon />}
-                  type="button"
-                  className="cursor-pointer"
-                  onClick={() => importFileRef.current?.click()}
-                >
-                  Import
-                </Button>
-              </label>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 mt-4 w-full">
-            <Accordion type="single" collapsible className="w-full">
-              <AccordionItem value="export-settings" className="w-full">
-                <AccordionTrigger className="w-full">
-                  Export Settings
-                </AccordionTrigger>
-                <AccordionContent className="w-full">
-                  <div className="flex items-center justify-between w-full">
-                    <Switch
-                      value={filterCredentialsInExport ?? false}
-                      onValueChange={(value) =>
-                        setFilterCredentialsInExport(value)
-                      }
-                      side="right"
-                      help="This will not exclude any URLs you have provided, these may contain credentials and you should always double check the contents of the exported file before sharing it."
-                      label="Exclude Credentials"
-                    />
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            </Accordion>
+            <input
+              type="file"
+              accept=".json"
+              className="hidden"
+              id="import-file"
+              onChange={handleImport}
+              ref={importFileRef}
+            />
+            <Button
+              onClick={importMenuModal.open}
+              leftIcon={<DownloadIcon />}
+              intent="gray"
+            >
+              Import
+            </Button>
           </div>
         </SettingsCard>
 
-        {uuid && (
-          <SettingsCard
-            title="Delete Configuration"
-            description="Delete your configuration and all associated data"
-          >
-            <Button intent="alert" rounded onClick={deleteModal.open}>
-              Delete
+        <SettingsCard
+          title="Danger Zone"
+          description="Perform potentially destructive actions that cannot be undone"
+          className="lg:bg-red-950/70 border-red-500/20"
+          titleClassName="group-hover/settings-card:from-red-500/10 group-hover/settings-card:to-red-950/20"
+        >
+          <div className="flex items-center gap-3">
+            {uuid && (
+              <Button intent="alert" rounded onClick={deleteUserModal.open}>
+                Delete User
+              </Button>
+            )}
+            <Button intent="alert" rounded onClick={confirmResetProps.open}>
+              Reset Configuration
             </Button>
-          </SettingsCard>
-        )}
+          </div>
+        </SettingsCard>
 
         <Modal
-          open={deleteModal.isOpen}
-          onOpenChange={deleteModal.toggle}
+          open={deleteUserModal.isOpen}
+          onOpenChange={deleteUserModal.toggle}
           title="Delete Configuration"
           description={
             <Alert
@@ -625,7 +632,7 @@ function Content() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              if (!deletePassword) {
+              if (!confirmDeletionPassword) {
                 toast.error('Please enter your password');
                 return;
               }
@@ -635,17 +642,17 @@ function Content() {
             <div className="space-y-4">
               <PasswordInput
                 label="Password"
-                value={deletePassword}
+                value={confirmDeletionPassword}
                 required
                 placeholder="Enter your password to confirm deletion"
-                onValueChange={(value) => setDeletePassword(value)}
+                onValueChange={(value) => setConfirmDeletionPassword(value)}
               />
               <div className="pt-2">
                 <div className="grid grid-cols-2 gap-3 w-full">
                   <Button
                     type="button"
                     intent="gray-outline"
-                    onClick={deleteModal.close}
+                    onClick={deleteUserModal.close}
                     className="w-full"
                   >
                     Cancel
@@ -664,6 +671,90 @@ function Content() {
           </form>
         </Modal>
         <ConfirmationDialog {...confirmDelete} />
+        <ConfirmationDialog {...confirmResetProps} />
+
+        <Modal
+          open={exportMenuModal.isOpen}
+          onOpenChange={exportMenuModal.toggle}
+          title="Export Configuration"
+          description="Choose how to export your configuration"
+        >
+          <div className="space-y-4">
+            {/* Exclude Credentials Option */}
+            <div className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+              <div className="flex-1">
+                <div className="text-sm font-medium text-white">
+                  Exclude Credentials
+                </div>
+                <div className="text-xs text-gray-400 mt-1">
+                  Remove sensitive information from export
+                </div>
+              </div>
+              <Switch
+                value={filterCredentialsInExport}
+                onValueChange={setFilterCredentialsInExport}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <ModalOptionButton
+                onClick={handleExport}
+                icon={<UploadIcon className="h-8 w-8" />}
+                title="Export Config"
+                description="Download as JSON file for backup or sharing"
+              />
+              <ModalOptionButton
+                onClick={() => {
+                  exportMenuModal.close();
+                  templateExportModal.open();
+                }}
+                icon={<PlusIcon className="h-8 w-8" />}
+                title="Export as Template"
+                description="Create reusable template with custom metadata"
+              />
+            </div>
+          </div>
+        </Modal>
+
+        <Modal
+          open={importMenuModal.isOpen}
+          onOpenChange={importMenuModal.toggle}
+          title="Import Configuration"
+          description="Choose what type of configuration to import"
+        >
+          <div className="grid grid-cols-2 gap-4">
+            <ModalOptionButton
+              onClick={() => {
+                importMenuModal.close();
+                importFileRef.current?.click();
+              }}
+              icon={<DownloadIcon className="h-8 w-8" />}
+              title="Import Config"
+              description="Restore from a backup JSON file"
+            />
+            <ModalOptionButton
+              onClick={() => {
+                importMenuModal.close();
+                templatesModal.open();
+              }}
+              icon={<PlusIcon className="h-8 w-8" />}
+              title="Import Template"
+              description="Load a pre-configured template"
+            />
+          </div>
+        </Modal>
+
+        <TemplateExportModal
+          open={templateExportModal.isOpen}
+          onOpenChange={templateExportModal.toggle}
+          userData={userData}
+          filterCredentials={filterCredentials}
+        />
+        <ConfigTemplatesModal
+          open={templatesModal.isOpen}
+          onOpenChange={templatesModal.toggle}
+          openImportModal
+        />
       </div>
     </>
   );

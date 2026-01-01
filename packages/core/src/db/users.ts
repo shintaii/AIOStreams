@@ -1,22 +1,19 @@
-// import { UserDataSchema, UserData, DB } from '../db';
-import { UserDataSchema, UserData } from './schemas';
-import { TransactionQueue } from './queue';
-import { DB } from './db';
+import { UserData } from './schemas.js';
+import { TransactionQueue } from './queue.js';
+import { DB } from './db.js';
 import {
   decryptString,
   deriveKey,
   encryptString,
   generateUUID,
   getTextHash,
-  maskSensitiveInfo,
   createLogger,
   constants,
   Env,
   verifyHash,
   validateConfig,
-  formatZodError,
   applyMigrations,
-} from '../utils';
+} from '../utils/index.js';
 
 const APIError = constants.APIError;
 const logger = createLogger('users');
@@ -44,6 +41,7 @@ export class UserRepository {
         );
       }
       config.trusted = false;
+      config.ip = undefined;
       try {
         // don't skip errors, but don't decrypt credentials
         // as we need to store the encrypted version
@@ -193,6 +191,7 @@ export class UserRepository {
       decryptedConfig.trusted =
         Env.TRUSTED_UUIDS?.split(',').some((u) => new RegExp(u).test(uuid)) ??
         false;
+      decryptedConfig.ip = undefined;
       logger.info(`Retrieved configuration for user ${uuid}`);
       return applyMigrations(decryptedConfig);
     } catch (error) {
@@ -235,6 +234,7 @@ export class UserRepository {
         config.trusted =
           Env.TRUSTED_UUIDS?.split(',').some((u) => new RegExp(u).test(uuid)) ??
           false;
+        config.ip = undefined;
         let validatedConfig: UserData;
         try {
           validatedConfig = await validateConfig(config, {
@@ -287,8 +287,9 @@ export class UserRepository {
 
   static async getUserCount(): Promise<number> {
     try {
-      const result = await db.query('SELECT * FROM users');
-      return result.length;
+      const result = await db.query('SELECT COUNT(*) as count FROM users');
+      const count = Number(result[0]?.count || 0);
+      return Number.isNaN(count) ? 0 : count;
     } catch (error) {
       logger.error(`Error getting user count: ${error}`);
       return Promise.reject(new APIError(constants.ErrorCode.DATABASE_ERROR));

@@ -1,16 +1,10 @@
-// utility function for debrid-based builtins
-
-import z from 'zod';
 import {
   BuiltinServiceId,
-  constants,
   createLogger,
   getTimeTakenSincePoint,
-} from '../../utils';
+} from '../../utils/index.js';
 import {
   BuiltinDebridServices,
-  DebridDownload,
-  DebridError,
   DebridFile,
   getDebridService,
   selectFileInTorrentOrNZB,
@@ -20,9 +14,12 @@ import {
   NZB,
   isSeasonWrong,
   isEpisodeWrong,
-} from '../../debrid';
-import { PTT } from '../../parser';
-import { ParseResult } from 'go-ptt';
+  isTitleWrong,
+  DebridDownload,
+  isNotVideoFile,
+} from '../../debrid/index.js';
+import { parseTorrentTitle, ParsedResult } from '@viren070/parse-torrent-title';
+import { preprocessTitle } from '../../parser/utils.js';
 
 // we have a list of torrents which need to be
 // - 1. checked for instant availability for each configured debrid service
@@ -38,6 +35,14 @@ interface Metadata {
   season?: number;
   episode?: number;
   absoluteEpisode?: number;
+}
+
+export function validateInfoHash(
+  infoHash: string | undefined
+): string | undefined {
+  return infoHash && /^[a-f0-9]{40}$/i.test(infoHash)
+    ? infoHash.toLowerCase()
+    : undefined;
 }
 
 export function extractTrackersFromMagnet(magnet: string): string[] {
@@ -120,43 +125,50 @@ async function processTorrentsForDebridService(
     torrents.map((torrent) => torrent.hash),
     stremioId
   );
+  // const magnetCheckTime = getTimeTakenSincePoint(startTime);
+  logger.debug(`Retrieved magnet status from debrid`, {
+    service: debridService.serviceName,
+    magnetCount: torrents.length,
+    cached: magnetCheckResults.filter((r) => r.status === 'cached').length,
+    time: getTimeTakenSincePoint(startTime),
+  });
 
-  const allStrings: string[] = [];
+  // Parse only torrent titles and perform validation checks
+  const processingStart = Date.now();
+  const parseStart = Date.now();
+  const torrentTitles = torrents.map((torrent) => torrent.title ?? '');
+  const parsedTitles: ParsedResult[] = torrentTitles.map((title) =>
+    parseTorrentTitle(title)
+  );
+  const parsedTitlesMap = new Map<string, ParsedResult>();
+  for (const [index, result] of parsedTitles.entries()) {
+    parsedTitlesMap.set(torrentTitles[index], result);
+  }
 
-  // First add all torrent titles
+  // Filter torrents that pass validation checks
+  const validTorrents: {
+    torrent: Torrent;
+    magnetCheckResult: DebridDownload | undefined;
+    parsedTitle: ParsedResult;
+  }[] = [];
   for (const torrent of torrents) {
-    allStrings.push(torrent.title ?? '');
-  }
-
-  // Then add all filenames from all torrents
-  for (const torrent of magnetCheckResults) {
-    if (torrent.files && Array.isArray(torrent.files)) {
-      for (const file of torrent.files) {
-        allStrings.push(file.name ?? '');
-      }
-    }
-  }
-
-  // Parse all strings in one call
-  const allParsedResults = await PTT.parse(allStrings);
-
-  // Split the results into parsed titles and files
-  const parsedFiles = new Map<string, ParseResult>();
-  for (const [index, result] of allParsedResults.entries()) {
-    if (result) {
-      parsedFiles.set(allStrings[index], result);
-    }
-  }
-
-  for (const [index, torrent] of torrents.entries()) {
-    let file: DebridFile | undefined;
-
     const magnetCheckResult = magnetCheckResults.find(
       (result) => result.hash === torrent.hash
     );
+    const parsedTorrent = parsedTitlesMap.get(torrent.title ?? '');
 
-    const parsedTorrent = parsedFiles.get(torrent.title ?? '');
     if (metadata && parsedTorrent) {
+      const preprocessedTitle = preprocessTitle(
+        parsedTorrent.title ?? '',
+        torrent.title ?? '',
+        metadata.titles
+      );
+      if (
+        torrent.confirmed !== true &&
+        isTitleWrong({ title: preprocessedTitle }, metadata)
+      ) {
+        continue;
+      }
       if (isSeasonWrong(parsedTorrent, metadata)) {
         continue;
       }
@@ -164,12 +176,46 @@ async function processTorrentsForDebridService(
         continue;
       }
     }
+
+    validTorrents.push({
+      torrent,
+      magnetCheckResult,
+      parsedTitle: parsedTorrent!,
+    });
+  }
+
+  // Parse files only for valid torrents
+  const allFileStrings: string[] = [];
+  for (const { magnetCheckResult } of validTorrents) {
+    if (magnetCheckResult?.files && Array.isArray(magnetCheckResult.files)) {
+      for (const file of magnetCheckResult.files) {
+        if (isNotVideoFile(file)) continue;
+        allFileStrings.push(file.name ?? '');
+      }
+    }
+  }
+
+  // Parse all file strings in one call
+  const allParsedFiles: ParsedResult[] = allFileStrings.map((string) =>
+    parseTorrentTitle(string)
+  );
+  const parsedFiles = new Map<string, ParsedResult>();
+  for (const [index, result] of allParsedFiles.entries()) {
+    parsedFiles.set(allFileStrings[index], result);
+  }
+  const parseTime = getTimeTakenSincePoint(parseStart);
+  for (const { torrent, magnetCheckResult, parsedTitle } of validTorrents) {
+    let file: DebridFile | undefined;
+
     file = magnetCheckResult
       ? await selectFileInTorrentOrNZB(
           torrent,
           magnetCheckResult,
           parsedFiles,
-          metadata
+          metadata,
+          {
+            useLevenshteinMatching: false,
+          }
         )
       : { name: torrent.title, size: torrent.size, index: -1 };
 
@@ -180,15 +226,20 @@ async function processTorrentsForDebridService(
         service: {
           id: service.id,
           cached: magnetCheckResult?.status === 'cached',
-          owned: false,
+          library: magnetCheckResult?.library === true,
         },
       });
     }
   }
 
-  logger.debug(
-    `Processed ${torrents.length} torrents for ${service.id} in ${getTimeTakenSincePoint(startTime)}`
-  );
+  logger.debug(`Finished processing of torrents`, {
+    service: service.id,
+    torrents: torrents.length,
+    validTorrents: validTorrents.length,
+    finalTorrents: results.length,
+    totalTime: getTimeTakenSincePoint(processingStart),
+    parseTime,
+  });
 
   return results;
 }
@@ -199,28 +250,20 @@ export async function processTorrentsForP2P(
 ): Promise<TorrentWithSelectedFile[]> {
   const results: TorrentWithSelectedFile[] = [];
 
-  const allStrings: string[] = [];
+  // Parse only torrent titles and perform validation checks
+  const torrentTitles = torrents.map((torrent) => torrent.title ?? '');
+  const parsedTitles: ParsedResult[] = torrentTitles.map((title) =>
+    parseTorrentTitle(title)
+  );
+  const parsedTitlesMap = new Map<string, ParsedResult>();
+  for (const [index, result] of parsedTitles.entries()) {
+    parsedTitlesMap.set(torrentTitles[index], result);
+  }
+
+  // Filter torrents that pass validation checks
+  const validTorrents: { torrent: Torrent; parsedTitle: ParsedResult }[] = [];
   for (const torrent of torrents) {
-    allStrings.push(torrent.title ?? '');
-    if (torrent.files && Array.isArray(torrent.files)) {
-      for (const file of torrent.files) {
-        allStrings.push(file.name ?? '');
-      }
-    }
-  }
-
-  const allParsedResults = await PTT.parse(allStrings);
-  const parsedFiles = new Map<string, ParseResult>();
-  for (const [index, result] of allParsedResults.entries()) {
-    if (result) {
-      parsedFiles.set(allStrings[index], result);
-    }
-  }
-
-  for (const [index, torrent] of torrents.entries()) {
-    let file: DebridFile | undefined;
-
-    const parsedTorrent = parsedFiles.get(torrent.title ?? '');
+    const parsedTorrent = parsedTitlesMap.get(torrent.title ?? '');
     if (metadata && parsedTorrent) {
       if (isSeasonWrong(parsedTorrent, metadata)) {
         continue;
@@ -229,6 +272,31 @@ export async function processTorrentsForP2P(
         continue;
       }
     }
+    validTorrents.push({ torrent, parsedTitle: parsedTorrent! });
+  }
+
+  // Parse files only for valid torrents
+  const allFileStrings: string[] = [];
+  for (const { torrent } of validTorrents) {
+    if (torrent.files && Array.isArray(torrent.files)) {
+      for (const file of torrent.files) {
+        if (isNotVideoFile(file)) continue;
+        allFileStrings.push(file.name ?? '');
+      }
+    }
+  }
+
+  const allParsedFiles: ParsedResult[] = allFileStrings.map((string) =>
+    parseTorrentTitle(string)
+  );
+  const parsedFiles = new Map<string, ParsedResult>();
+  for (const [index, result] of allParsedFiles.entries()) {
+    parsedFiles.set(allFileStrings[index], result);
+  }
+
+  for (const { torrent } of validTorrents) {
+    let file: DebridFile | undefined;
+
     file = torrent.files
       ? await selectFileInTorrentOrNZB(
           torrent,
@@ -240,7 +308,10 @@ export async function processTorrentsForP2P(
             files: torrent.files,
           },
           parsedFiles,
-          metadata
+          metadata,
+          {
+            useLevenshteinMatching: false,
+          }
         )
       : undefined;
 
@@ -260,7 +331,8 @@ export async function processNZBs(
   debridServices: BuiltinDebridServices,
   stremioId: string,
   metadata?: Metadata,
-  clientIp?: string
+  clientIp?: string,
+  checkOwned: boolean = true
 ): Promise<{
   results: NZBWithSelectedFile[];
   errors: { serviceId: BuiltinServiceId; error: Error }[];
@@ -278,7 +350,8 @@ export async function processNZBs(
         service,
         stremioId,
         metadata,
-        clientIp
+        clientIp,
+        checkOwned
       );
       return { serviceId: service.id, results: serviceResults, error: null };
     } catch (error) {
@@ -306,7 +379,8 @@ async function processNZBsForDebridService(
   service: BuiltinDebridServices[number],
   stremioId: string,
   metadata?: Metadata,
-  clientIp?: string
+  clientIp?: string,
+  checkOwned: boolean = true
 ): Promise<NZBWithSelectedFile[]> {
   const startTime = Date.now();
   const debridService = getDebridService(
@@ -322,37 +396,44 @@ async function processNZBsForDebridService(
   const results: NZBWithSelectedFile[] = [];
 
   const nzbCheckResults = await debridService.checkNzbs(
-    nzbs.map((nzb) => nzb.hash)
+    nzbs.map((nzb) => ({ name: nzb.title, hash: nzb.hash })),
+    checkOwned
   );
 
-  // parse all files from all nzbs in one call
+  logger.debug(`Retrieved NZB status from debrid`, {
+    service: debridService.serviceName,
+    nzbCount: nzbs.length,
+    time: getTimeTakenSincePoint(startTime),
+  });
 
-  const allStrings: string[] = [];
-
-  for (const nzb of nzbCheckResults) {
-    allStrings.push(nzb.name ?? '');
-    if (nzb.files && Array.isArray(nzb.files)) {
-      for (const file of nzb.files) {
-        allStrings.push(file.name ?? '');
-      }
-    }
+  // Parse only NZB titles and perform validation checks
+  const nzbTitles = nzbs.map((nzb) => nzb.title ?? '');
+  const parsedTitles: ParsedResult[] = nzbTitles.map((title) =>
+    parseTorrentTitle(title)
+  );
+  const parsedTitlesMap = new Map<string, ParsedResult>();
+  for (const [index, result] of parsedTitles.entries()) {
+    parsedTitlesMap.set(nzbTitles[index], result);
   }
 
-  const allParsedResults = await PTT.parse(allStrings);
-  const parsedFiles = new Map<string, ParseResult>();
-  for (const [index, result] of allParsedResults.entries()) {
-    if (result) {
-      parsedFiles.set(allStrings[index], result);
-    }
-  }
-
-  for (const [index, nzb] of nzbs.entries()) {
-    let file: DebridFile | undefined;
-
+  // Filter NZBs that pass validation checks
+  const validNZBs: {
+    nzb: NZB;
+    nzbCheckResult: DebridDownload | undefined;
+    parsedTitle: ParsedResult;
+  }[] = [];
+  for (const nzb of nzbs) {
     const nzbCheckResult = nzbCheckResults.find(
       (result) => result.hash === nzb.hash
     );
-    const parsedNzb = parsedFiles.get(nzb.title ?? '');
+    if (nzbCheckResult?.status === 'failed') {
+      logger.debug(`Skipping NZB as its status is failed`, {
+        service: service.id,
+        nzb: nzb.title,
+      });
+      continue;
+    }
+    const parsedNzb = parsedTitlesMap.get(nzb.title ?? '');
     if (metadata && parsedNzb) {
       if (isSeasonWrong(parsedNzb, metadata)) {
         continue;
@@ -361,6 +442,32 @@ async function processNZBsForDebridService(
         continue;
       }
     }
+    validNZBs.push({ nzb, nzbCheckResult, parsedTitle: parsedNzb! });
+  }
+
+  // Parse files only for valid NZBs
+  const allFileStrings: string[] = [];
+  for (const { nzbCheckResult } of validNZBs) {
+    if (nzbCheckResult?.files && Array.isArray(nzbCheckResult.files)) {
+      for (const file of nzbCheckResult.files) {
+        if (isNotVideoFile(file)) continue;
+        allFileStrings.push(file.name ?? '');
+      }
+    }
+  }
+
+  const allParsedFiles: ParsedResult[] = allFileStrings.map((string) =>
+    parseTorrentTitle(string)
+  );
+  const parsedFiles = new Map<string, ParsedResult>();
+  for (const [index, result] of allParsedFiles.entries()) {
+    parsedFiles.set(allFileStrings[index], result);
+  }
+
+  const processingStart = Date.now();
+  for (const { nzb, nzbCheckResult } of validNZBs) {
+    let file: DebridFile | undefined;
+
     file = nzbCheckResult
       ? await selectFileInTorrentOrNZB(
           nzb,
@@ -377,15 +484,19 @@ async function processNZBsForDebridService(
         service: {
           id: service.id,
           cached: nzbCheckResult?.status === 'cached',
-          owned: false,
+          library: nzbCheckResult?.library === true,
         },
       });
     }
   }
 
-  logger.debug(
-    `Processed ${nzbs.length} NZBs for ${service.id} in ${getTimeTakenSincePoint(startTime)}`
-  );
+  logger.debug(`Finished processing of NZBs`, {
+    service: service.id,
+    nzbs: nzbs.length,
+    validNzbs: validNZBs.length,
+    finalNzbs: results.length,
+    totalTime: getTimeTakenSincePoint(processingStart),
+  });
 
   return results;
 }

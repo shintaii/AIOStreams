@@ -17,11 +17,12 @@ import {
   BiFilterAlt,
   BiSave,
   BiSort,
-  BiLogInCircle,
-  BiLogOutCircle,
   BiCog,
   BiServer,
   BiSmile,
+  BiHeart,
+  BiLogOutCircle,
+  BiLogInCircle,
 } from 'react-icons/bi';
 import { useRouter, usePathname } from 'next/navigation';
 import { useDisclosure } from '@/hooks/disclosure';
@@ -35,6 +36,7 @@ import { toast } from 'sonner';
 import { Tooltip } from '@/components/ui/tooltip';
 import { useOptions } from '@/context/options';
 import { useMode } from '@/context/mode';
+import { DonationModal } from '@/components/shared/donation-modal';
 
 type MenuItem = VerticalMenuItem & {
   id: MenuId;
@@ -47,6 +49,7 @@ export function MainSidebar() {
   const { selectedMenu, setSelectedMenu } = useMenu();
   const pathname = usePathname();
   const { isOptionsEnabled, enableOptions } = useOptions();
+  const donationModal = useDisclosure(false);
 
   const user = useUserData();
   const signInModal = useDisclosure(false);
@@ -125,16 +128,12 @@ export function MainSidebar() {
       isCurrent: selectedMenu === 'formatter',
       id: 'formatter',
     },
-    ...(mode === 'pro'
-      ? [
-          {
-            name: 'Proxy',
-            iconType: BiServer,
-            isCurrent: selectedMenu === 'proxy',
-            id: 'proxy',
-          },
-        ]
-      : []),
+    {
+      name: 'Proxy',
+      iconType: BiServer,
+      isCurrent: selectedMenu === 'proxy',
+      id: 'proxy',
+    },
     {
       name: 'Miscellaneous',
       iconType: BiCog,
@@ -221,18 +220,26 @@ export function MainSidebar() {
               }}
             >
               <img
-                src={user.userData.addonLogo || '/logo.png'}
+                src={
+                  status?.settings.alternateDesign
+                    ? status?.tag.includes('nightly')
+                      ? '/mini-nightly-white.png'
+                      : '/mini-stable-white.png'
+                    : user.userData.addonLogo || '/logo.png'
+                }
                 alt="logo"
-                className="w-22.5 h-15"
+                className="max-w-[90px] max-h-[60px] object-contain"
               />
             </div>
-            <span className="text-xs text-gray-500">
-              {status
-                ? status.tag.includes('nightly')
-                  ? 'nightly'
-                  : status.tag
-                : ''}
-            </span>
+            {status?.settings.alternateDesign === false && (
+              <span className="text-xs text-gray-500">
+                {status
+                  ? status.tag.includes('nightly')
+                    ? 'nightly'
+                    : status.tag
+                  : ''}
+              </span>
+            )}
           </div>
           <VerticalMenu
             className="px-4"
@@ -246,41 +253,69 @@ export function MainSidebar() {
           />
         </div>
 
-        <div className="p-4">
+        <div className="p-4 gap-2 flex flex-col">
           <Tooltip
             side="right"
             trigger={
               <Button
-                intent="primary-subtle"
+                intent="alert-outline"
                 size="md"
-                rounded
                 iconSpacing="0"
                 className="w-full"
                 iconClass="text-3xl"
-                leftIcon={
-                  user.uuid && user.password ? (
-                    <BiLogOutCircle />
-                  ) : (
-                    <BiLogInCircle />
-                  )
-                }
+                leftIcon={<BiHeart />}
                 hideTextOnLargeScreen
                 onClick={() => {
-                  if (user.uuid && user.password) {
-                    confirmClearConfig.open();
-                  } else {
-                    signInModal.open();
-                  }
+                  donationModal.open();
                 }}
               >
-                <div className="flex items-center gap-2 ml-2">
-                  {user.uuid && user.password ? 'Log Out' : 'Log In'}
-                </div>
+                <div className="flex items-center gap-2 ml-2">Donate</div>
               </Button>
             }
           >
-            {user.uuid && user.password ? 'Log Out' : 'Log In'}
+            Donate
           </Tooltip>
+          {/** show a log out button when the user is logged in */}
+
+          {selectedMenu !== 'about' && (
+            <div className="hidden lg:block">
+              <Tooltip
+                side="right"
+                trigger={
+                  <Button
+                    intent="primary-outline"
+                    size="md"
+                    iconClass="text-3xl"
+                    className="w-full "
+                    iconSpacing="0"
+                    // leftIcon={<BiLogOutCircle />}
+                    leftIcon={
+                      user.uuid && user.password ? (
+                        <BiLogOutCircle />
+                      ) : (
+                        <BiLogInCircle />
+                      )
+                    }
+                    hideTextOnLargeScreen
+                    onClick={() => {
+                      // confirmClearConfig.open();
+                      if (user.uuid && user.password) {
+                        confirmClearConfig.open();
+                      } else {
+                        signInModal.open();
+                      }
+                    }}
+                  >
+                    <div className="flex items-center gap-2 ml-2">
+                      {user.uuid && user.password ? 'Sign Out' : 'Sign In'}
+                    </div>
+                  </Button>
+                }
+              >
+                {user.uuid && user.password ? 'Sign Out' : 'Sign In'}
+              </Tooltip>
+            </div>
+          )}
         </div>
       </AppSidebar>
 
@@ -299,6 +334,10 @@ export function MainSidebar() {
       />
 
       <ConfirmationDialog {...confirmClearConfig} />
+      <DonationModal
+        open={donationModal.isOpen}
+        onOpenChange={donationModal.toggle}
+      />
     </>
   );
 }

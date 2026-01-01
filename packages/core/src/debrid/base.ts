@@ -1,9 +1,5 @@
 import { z } from 'zod';
-import { constants, ServiceId } from '../utils';
-import { ErrorType, StremThruError } from 'stremthru';
-// type ErrorCode = "BAD_GATEWAY" | "BAD_REQUEST" | "CONFLICT" | "FORBIDDEN" | "GONE" | "INTERNAL_SERVER_ERROR" | "METHOD_NOT_ALLOWED" | "NOT_FOUND" | "NOT_IMPLEMENTED" | "PAYMENT_REQUIRED" | "PROXY_AUTHENTICATION_REQUIRED" | "SERVICE_UNAVAILABLE" | "STORE_LIMIT_EXCEEDED" | "STORE_MAGNET_INVALID" | "TOO_MANY_REQUESTS" | "UNAUTHORIZED" | "UNAVAILABLE_FOR_LEGAL_REASONS" | "UNKNOWN" | "UNPROCESSABLE_ENTITY" | "UNSUPPORTED_MEDIA_TYPE";
-
-StremThruError;
+import { constants, ServiceId } from '../utils/index.js';
 
 type DebridErrorCode =
   | 'BAD_GATEWAY'
@@ -90,6 +86,7 @@ export type DebridFile = z.infer<typeof DebridFileSchema>;
 
 export interface DebridDownload {
   id: string | number;
+  library?: boolean;
   hash?: string;
   name?: string;
   size?: number;
@@ -106,36 +103,52 @@ export interface DebridDownload {
   files?: DebridFile[];
 }
 
-const BasePlaybackInfoSchema = z.object({
-  // hash: z.string(),
-  title: z.string().optional(),
-  metadata: z
-    .object({
-      titles: z.array(z.string()),
-      season: z.number().optional(),
-      episode: z.number().optional(),
-      absoluteEpisode: z.number().optional(),
-    })
-    .optional(),
-  file: DebridFileSchema.optional(),
+const TitleMetadataSchema = z.object({
+  titles: z.array(z.string()),
+  year: z.number().optional(),
+  season: z.number().optional(),
+  episode: z.number().optional(),
+  absoluteEpisode: z.number().optional(),
 });
 
-const TorrentPlaybackInfoSchema = BasePlaybackInfoSchema.extend({
+const BasePlaybackInfoSchema = z.object({
+  // title: z.string().optional(),
+  metadata: TitleMetadataSchema.optional(),
+  filename: z.string().optional(),
+  index: z.number().optional(),
+});
+
+const BaseFileInfoSchema = z.object({
+  index: z.number().optional(),
+  cacheAndPlay: z.boolean().optional(),
+});
+
+const TorrentInfoSchema = BaseFileInfoSchema.extend({
   hash: z.string(),
   sources: z.array(z.string()),
-  // magnet: z.string().optional(),
   type: z.literal('torrent'),
 });
 
-const UsenetPlaybackInfoSchema = BasePlaybackInfoSchema.extend({
+const TorrentPlaybackInfoSchema =
+  BasePlaybackInfoSchema.merge(TorrentInfoSchema);
+
+const UsenetInfoSchema = BaseFileInfoSchema.extend({
   hash: z.string(),
+  easynewsUrl: z.string().optional(),
   nzb: z.string(),
   type: z.literal('usenet'),
 });
 
+const UsenetPlaybackInfoSchema = BasePlaybackInfoSchema.merge(UsenetInfoSchema);
+
 export const PlaybackInfoSchema = z.discriminatedUnion('type', [
   TorrentPlaybackInfoSchema,
   UsenetPlaybackInfoSchema,
+]);
+
+export const FileInfoSchema = z.discriminatedUnion('type', [
+  TorrentInfoSchema,
+  UsenetInfoSchema,
 ]);
 
 export const ServiceAuthSchema = z.object({
@@ -145,21 +158,29 @@ export const ServiceAuthSchema = z.object({
 export type ServiceAuth = z.infer<typeof ServiceAuthSchema>;
 
 export type PlaybackInfo = z.infer<typeof PlaybackInfoSchema>;
+export type FileInfo = z.infer<typeof FileInfoSchema>;
+export type TitleMetadata = z.infer<typeof TitleMetadataSchema>;
 
 export interface DebridService {
   // Common methods
   resolve(
     playbackInfo: PlaybackInfo,
-    filename: string
+    filename: string,
+    cacheAndPlay: boolean
   ): Promise<string | undefined>;
 
   // Torrent specific methods
   checkMagnets(magnets: string[], sid?: string): Promise<DebridDownload[]>;
+  listMagnets(): Promise<DebridDownload[]>;
   addMagnet(magnet: string): Promise<DebridDownload>;
   generateTorrentLink(link: string, clientIp?: string): Promise<string>;
 
   // Usenet specific methods
-  checkNzbs?(nzbs: string[]): Promise<DebridDownload[]>;
+  checkNzbs?(
+    nzbs: { name?: string; hash?: string }[],
+    checkOwned?: boolean
+  ): Promise<DebridDownload[]>;
+  listNzbs?(id?: string): Promise<DebridDownload[]>;
   addNzb?(nzb: string, name: string): Promise<DebridDownload>;
   generateUsenetLink?(
     downloadId: string,

@@ -1,12 +1,14 @@
 import { fetch } from 'undici';
 import {
   Cache,
+  createLogger,
   DistributedLock,
   Env,
   formatZodError,
   makeRequest,
-} from '../../utils';
+} from '../../utils/index.js';
 import z from 'zod';
+import { searchWithBackgroundRefresh } from '../utils/general.js';
 
 interface ResponseMeta {
   headers: Record<string, string>;
@@ -40,6 +42,12 @@ const ProwlarrErrorSchema = z.object({
   description: z.string(),
 });
 
+const ProwlarrApiTagItemSchema = z.object({
+  label: z.string(),
+  id: z.number(),
+});
+const ProwlarrApiTagsListSchema = z.array(ProwlarrApiTagItemSchema);
+export type ProwlarrApiTagItem = z.infer<typeof ProwlarrApiTagItemSchema>;
 // minimise schema to only include the fields we need
 const ProwlarrApiIndexerSchema = z.object({
   id: z.number(),
@@ -47,6 +55,8 @@ const ProwlarrApiIndexerSchema = z.object({
   sortName: z.string(),
   definitionName: z.string(),
   enable: z.boolean(),
+  protocol: z.enum(['torrent', 'usenet']),
+  tags: z.array(z.number()),
 });
 
 export type ProwlarrApiIndexer = z.infer<typeof ProwlarrApiIndexerSchema>;
@@ -54,16 +64,14 @@ export type ProwlarrApiIndexer = z.infer<typeof ProwlarrApiIndexerSchema>;
 const ProwlarrApiIndexersListSchema = z.array(ProwlarrApiIndexerSchema);
 
 const ProwlarrApiSearchItemSchema = z.object({
-  guid: z.string(), // can sometimes be the raw magnet url
+  guid: z.string().optional(), // can sometimes be the raw magnet url
   age: z.number(), // in days
   size: z.number(),
   indexerId: z.number(),
   indexer: z.string(),
   title: z.string(),
   downloadUrl: z.url().optional(),
-  indexerFlags: z.array(
-    z.enum(['freeleech', 'public', 'private', 'semi-private'])
-  ),
+  indexerFlags: z.array(z.string()),
   magnetUrl: z.url().optional(),
   infoHash: z
     .string()
@@ -73,6 +81,8 @@ const ProwlarrApiSearchItemSchema = z.object({
 });
 
 const ProwlarrApiSearchSchema = z.array(ProwlarrApiSearchItemSchema);
+
+const logger = createLogger('prowlarr');
 
 export type ProwlarrApiSearchItem = z.infer<typeof ProwlarrApiSearchItemSchema>;
 
@@ -84,7 +94,7 @@ class ProwlarrApi {
 
   private readonly searchCache = Cache.getInstance<
     string,
-    ProwlarrApiSearchItem[]
+    ProwlarrApiResponse<ProwlarrApiSearchItem[]>
   >('prowlarr-api:search');
 
   private readonly indexersCache = Cache.getInstance<
@@ -92,11 +102,15 @@ class ProwlarrApi {
     ProwlarrApiIndexer[]
   >('prowlarr-api:indexers');
 
+  private readonly tagsCache = Cache.getInstance<string, ProwlarrApiTagItem[]>(
+    'prowlarr-api:tags'
+  );
+
   #headers: Record<string, string>;
   #timeout: number;
 
   constructor(config: ProwlarrConfig) {
-    this.baseUrl = config.baseUrl;
+    this.baseUrl = config.baseUrl.replace(/\/$/, '');
     this.apiKey = config.apiKey;
     this.#headers = {
       'Content-Type': 'application/json',
@@ -106,6 +120,19 @@ class ProwlarrApi {
     this.#timeout = config.timeout;
   }
 
+  async tags(): Promise<ProwlarrApiResponse<ProwlarrApiTagItem[]>> {
+    return this.tagsCache.wrap(
+      () =>
+        this.request<ProwlarrApiTagItem[]>(
+          'tag',
+          {},
+          ProwlarrApiTagsListSchema
+        ),
+      `${this.baseUrl}:tag`,
+      Env.BUILTIN_PROWLARR_INDEXERS_CACHE_TTL
+    );
+  }
+
   async indexers(): Promise<ProwlarrApiResponse<ProwlarrApiIndexer[]>> {
     return this.indexersCache.wrap(
       () =>
@@ -113,7 +140,7 @@ class ProwlarrApi {
           'indexer',
           {},
           ProwlarrApiIndexersListSchema,
-          1000
+          3000
         ),
       `${this.baseUrl}:indexer`,
       Env.BUILTIN_PROWLARR_INDEXERS_CACHE_TTL
@@ -133,8 +160,14 @@ class ProwlarrApi {
     limit?: number;
     offset?: number;
   }): Promise<ProwlarrApiResponse<ProwlarrApiSearchItem[]>> {
-    return this.searchCache.wrap(
-      () =>
+    const cacheKey = `${this.baseUrl}:${type}:${query}:${indexerIds.join(',')}:${limit}:${offset}`;
+
+    return searchWithBackgroundRefresh({
+      searchCache: this.searchCache,
+      searchCacheKey: cacheKey,
+      bgCacheKey: `prowlarr:${cacheKey}`,
+      cacheTTL: Env.BUILTIN_PROWLARR_SEARCH_CACHE_TTL,
+      fetchFn: () =>
         this.request<ProwlarrApiSearchItem[]>(
           'search',
           {
@@ -146,9 +179,9 @@ class ProwlarrApi {
           },
           ProwlarrApiSearchSchema
         ),
-      `${this.baseUrl}:search:${query}`,
-      Env.BUILTIN_PROWLARR_SEARCH_CACHE_TTL
-    );
+      isEmptyResult: (result) => result.data.length === 0,
+      logger,
+    });
   }
 
   private getPath(endpoint: string) {

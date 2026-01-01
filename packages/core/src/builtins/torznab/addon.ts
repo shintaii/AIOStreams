@@ -1,15 +1,18 @@
 import { z } from 'zod';
-import { ParsedId } from '../../utils/id-parser';
-import { createLogger } from '../../utils';
-import { Torrent, NZB, UnprocessedTorrent } from '../../debrid';
+import { ParsedId } from '../../utils/id-parser.js';
+import { createLogger } from '../../utils/index.js';
+import { Torrent, NZB, UnprocessedTorrent } from '../../debrid/index.js';
 import { SearchMetadata } from '../base/debrid';
-import { extractTrackersFromMagnet } from '../utils/debrid';
-import { BaseNabApi, Capabilities } from '../base/nab/api';
+import {
+  extractTrackersFromMagnet,
+  validateInfoHash,
+} from '../utils/debrid.js';
+import { BaseNabApi, Capabilities } from '../base/nab/api.js';
 import {
   BaseNabAddon,
   NabAddonConfigSchema,
   NabAddonConfig,
-} from '../base/nab/addon';
+} from '../base/nab/addon.js';
 
 const logger = createLogger('torznab');
 
@@ -41,7 +44,7 @@ export class TorznabAddon extends BaseNabAddon<NabAddonConfig, TorznabApi> {
     parsedId: ParsedId,
     metadata: SearchMetadata
   ): Promise<UnprocessedTorrent[]> {
-    const results = await this.performSearch(parsedId, metadata);
+    const { results, meta } = await this.performSearch(parsedId, metadata);
     const seenTorrents = new Set<string>();
 
     const torrents: UnprocessedTorrent[] = [];
@@ -50,7 +53,7 @@ export class TorznabAddon extends BaseNabAddon<NabAddonConfig, TorznabApi> {
       const infoHash = this.extractInfoHash(result);
       const downloadUrl = result.enclosure.find(
         (e: any) =>
-          e.type === 'application/x-bittorrent' && e.url.includes('.torrent')
+          e.type === 'application/x-bittorrent' && !e.url.includes('magnet:')
       )?.url;
 
       if (!infoHash && !downloadUrl) continue;
@@ -58,6 +61,7 @@ export class TorznabAddon extends BaseNabAddon<NabAddonConfig, TorznabApi> {
       seenTorrents.add(infoHash ?? downloadUrl!);
 
       torrents.push({
+        confirmed: meta.searchType === 'id',
         hash: infoHash,
         downloadUrl,
         sources: result.torznab?.magneturl?.toString()
@@ -68,8 +72,11 @@ export class TorznabAddon extends BaseNabAddon<NabAddonConfig, TorznabApi> {
           ![-1, 999].includes(result.torznab.seeders)
             ? result.torznab.seeders
             : undefined,
+        indexer: result.jackettindexer?.name ?? undefined,
         title: result.title,
-        size: result.size ?? 0,
+        size:
+          result.size ??
+          (result.torznab?.size ? Number(result.torznab.size) : 0),
         type: 'torrent',
       });
     }
@@ -86,12 +93,17 @@ export class TorznabAddon extends BaseNabAddon<NabAddonConfig, TorznabApi> {
   }
 
   private extractInfoHash(result: any): string | undefined {
-    return (
+    return validateInfoHash(
       result.torznab?.infohash?.toString() ||
-      result.torznab?.magneturl
-        ?.toString()
-        ?.match(/(?:urn(?::|%3A)btih(?::|%3A))([a-f0-9]{40})/i)?.[1]
-        ?.toLowerCase()
+        (
+          result.torznab?.magneturl ||
+          result.enclosure.find(
+            (e: any) =>
+              e.type === 'application/x-bittorrent' && e.url.includes('magnet:')
+          )?.url
+        )
+          ?.toString()
+          ?.match(/(?:urn(?::|%3A)btih(?::|%3A))([a-f0-9]{40})/i)?.[1]
     );
   }
 }

@@ -1,6 +1,6 @@
-import { CacheKeyRequestOptions, Preset, baseOptions } from './preset';
-import { constants, Env } from '../utils';
-import { Addon, Option, UserData } from '../db';
+import { CacheKeyRequestOptions, Preset, baseOptions } from './preset.js';
+import { constants, Env } from '../utils/index.js';
+import { Addon, Option, UserData } from '../db/index.js';
 
 export class TMDBAddonPreset extends Preset {
   static override get METADATA() {
@@ -279,6 +279,7 @@ export class TMDBAddonPreset extends Preset {
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [],
       SUPPORTED_RESOURCES: supportedResources,
+      CATEGORY: constants.PresetCategory.META_CATALOGS,
     };
   }
 

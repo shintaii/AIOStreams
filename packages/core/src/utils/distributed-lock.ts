@@ -1,10 +1,8 @@
-import { createLogger } from './logger';
-import { DB } from '../db/db';
-import { Cache } from './cache';
+import { DB } from '../db/db.js';
 import { RedisClientType } from 'redis';
-import { Env } from './env';
-import { REDIS_PREFIX } from './constants';
-import { TransactionQueue } from '../db/queue';
+import { TransactionQueue } from '../db/queue.js';
+import { Cache, Env, REDIS_PREFIX } from './index.js';
+import { createLogger } from './logger.js';
 
 const logger = createLogger('distributed-lock');
 const lockPrefix = `${REDIS_PREFIX}lock:`;
@@ -13,6 +11,7 @@ export interface LockOptions {
   timeout?: number;
   ttl?: number;
   retryInterval?: number;
+  type?: 'memory' | 'sql' | 'redis';
 }
 
 export interface LockResult<T> {
@@ -31,6 +30,21 @@ export class DistributedLock {
   private subRedis: RedisClientType | null = null;
   private initialised = false;
   private initialisePromise: Promise<void> | null = null;
+
+  // In-memory lock storage
+  private memoryLocks: Map<
+    string,
+    {
+      owner: string;
+      expiresAt: number;
+      result?: any;
+      error?: Error;
+      waiters: Array<{
+        resolve: (result: any) => void;
+        reject: (error: Error) => void;
+      }>;
+    }
+  > = new Map();
 
   private constructor() {}
 
@@ -67,7 +81,12 @@ export class DistributedLock {
     options: LockOptions = {}
   ): Promise<LockResult<T>> {
     await this.initialise();
-    return this.redis
+
+    if (options.type === 'memory') {
+      return this.withMemoryLock(key, fn, options);
+    }
+
+    return this.redis && options.type !== 'sql'
       ? this.withRedisLock(key, fn, options)
       : this.withSqlLock(key, fn, options);
   }
@@ -110,12 +129,19 @@ export class DistributedLock {
       return { result, cached: false };
     }
 
+    // Waiter logic
     return new Promise((resolve, reject) => {
       let timeoutId: NodeJS.Timeout;
 
-      const subscriber = (message: string) => {
+      const cleanup = () => {
         clearTimeout(timeoutId);
-        this.subRedis!.unsubscribe(doneChannel);
+        this.subRedis!.unsubscribe(doneChannel).catch((e) =>
+          logger.error(`Error during unsubscribe: ${e.message}`)
+        );
+      };
+
+      const subscriber = (message: string) => {
+        cleanup();
         const storedResult: StoredResult<T> = JSON.parse(message);
         if (storedResult.error) {
           logger.warn(
@@ -128,14 +154,146 @@ export class DistributedLock {
         }
       };
 
-      this.subRedis!.subscribe(doneChannel, subscriber).catch(reject);
-
-      timeoutId = setTimeout(() => {
-        this.subRedis!.unsubscribe(doneChannel);
+      const onTimeout = () => {
+        cleanup();
         const errorMessage = `Timed out waiting for redis lock on key: ${key}`;
         logger.error(errorMessage);
         reject(new Error(errorMessage));
+      };
+
+      this.subRedis!.subscribe(doneChannel, subscriber)
+        .then(() => {
+          timeoutId = setTimeout(onTimeout, timeout);
+          // Double-check the lock's existence to handle race conditions.
+          this.redis!.get(redisKey)
+            .then((lockValue) => {
+              if (lockValue === null) {
+                logger.warn(
+                  `Lock for key ${key} was released before subscription completed. Timing out.`
+                );
+                onTimeout();
+              }
+            })
+            .catch((err) => {
+              cleanup();
+              reject(err);
+            });
+        })
+        .catch((err) => {
+          reject(err);
+        });
+    });
+  }
+
+  private async withMemoryLock<T>(
+    key: string,
+    fn: () => Promise<T>,
+    options: LockOptions
+  ): Promise<LockResult<T>> {
+    const { timeout = 30000, ttl = 60000 } = options;
+    const owner = Math.random().toString(36).substring(2);
+
+    // Clean up expired locks
+    const now = Date.now();
+    for (const [lockKey, lock] of this.memoryLocks.entries()) {
+      if (lock.expiresAt < now) {
+        this.memoryLocks.delete(lockKey);
+      }
+    }
+
+    const existingLock = this.memoryLocks.get(key);
+
+    // Try to acquire the lock
+    if (!existingLock || existingLock.expiresAt < now) {
+      logger.debug(`Memory lock acquired for key: ${key}`);
+
+      const lock: {
+        owner: string;
+        expiresAt: number;
+        result?: T;
+        error?: Error;
+        waiters: Array<{
+          resolve: (result: any) => void;
+          reject: (error: Error) => void;
+        }>;
+      } = {
+        owner,
+        expiresAt: now + ttl,
+        waiters: [],
+      };
+      this.memoryLocks.set(key, lock);
+
+      let result: T;
+      try {
+        result = await fn();
+        lock.result = result;
+        lock.waiters.forEach(({ resolve }) =>
+          resolve({ result, cached: true })
+        );
+        lock.waiters = [];
+      } catch (e: any) {
+        lock.error = e instanceof Error ? e : new Error(String(e));
+
+        lock.waiters.forEach(({ reject }) => reject(lock.error!));
+        lock.waiters = [];
+
+        throw e;
+      } finally {
+        setTimeout(() => {
+          logger.debug(`Releasing memory lock for key: ${key}`);
+          this.memoryLocks.delete(key);
+        }, 2000);
+      }
+
+      return { result, cached: false };
+    }
+
+    // Wait for the lock holder to finish
+    return new Promise<LockResult<T>>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        const errorMessage = `Timed out waiting for memory lock on key: ${key}`;
+        logger.error(errorMessage);
+
+        // Remove this waiter from the list
+        const lock = this.memoryLocks.get(key);
+        if (lock) {
+          const waiterIndex = lock.waiters.findIndex(
+            (w) => w.resolve === waiterResolve
+          );
+          if (waiterIndex > -1) {
+            lock.waiters.splice(waiterIndex, 1);
+          }
+        }
+
+        reject(new Error(errorMessage));
       }, timeout);
+
+      const waiterResolve = (lockResult: LockResult<T>) => {
+        clearTimeout(timeoutId);
+        logger.debug(
+          `Received cached result for key: ${key} from memory lock.`
+        );
+        resolve(lockResult);
+      };
+
+      const waiterReject = (error: Error) => {
+        clearTimeout(timeoutId);
+        logger.warn(
+          `Received error result for key: ${key} from memory lock holder.`
+        );
+        reject(error);
+      };
+
+      if (existingLock.result !== undefined) {
+        waiterResolve({ result: existingLock.result, cached: true });
+      } else if (existingLock.error) {
+        waiterReject(existingLock.error);
+      } else {
+        existingLock.waiters.push({
+          resolve: waiterResolve,
+          reject: waiterReject,
+        });
+      }
     });
   }
 
@@ -148,7 +306,7 @@ export class DistributedLock {
     const { timeout = 30000, ttl = 60000 } = options;
     const { retryInterval = db.isSQLite() ? 250 : 100 } = options;
     const owner = Math.random().toString(36).substring(2);
-    const expiresAt = new Date(Date.now() + ttl);
+    const expiresAt = Date.now() + ttl;
 
     const tryAcquireLock = async () => {
       return TransactionQueue.getInstance().enqueue(async () => {
@@ -156,22 +314,32 @@ export class DistributedLock {
         try {
           await tx.execute(
             `DELETE FROM distributed_locks WHERE expires_at < ?`,
-            [new Date()]
+            [Date.now()]
           );
-          const existing = await tx.execute(
-            `SELECT * FROM distributed_locks WHERE key = ?`,
-            [key]
-          );
-          if (existing.rows.length === 0) {
-            await tx.execute(
-              `INSERT INTO distributed_locks (key, owner, expires_at) VALUES (?, ?, ?)`,
+
+          let acquired = false;
+          if (db.isSQLite()) {
+            const result = await tx.execute(
+              `INSERT OR IGNORE INTO distributed_locks (key, owner, expires_at) VALUES (?, ?, ?)`,
               [key, owner, expiresAt]
             );
-            await tx.commit();
+            acquired = db.getRowsAffected(result) > 0;
+          } else {
+            const result = await tx.execute(
+              `INSERT INTO distributed_locks (key, owner, expires_at) 
+               VALUES ($1, $2, $3)
+               ON CONFLICT (key) DO NOTHING
+               RETURNING key`,
+              [key, owner, expiresAt]
+            );
+            acquired = (result.rows.length || result.rowCount) > 0;
+          }
+
+          await tx.commit();
+          if (acquired) {
             logger.debug(`SQL lock acquired for key: ${key}`);
             return true;
           }
-          await tx.rollback();
           return false;
         } catch (e) {
           await tx.rollback();
@@ -244,6 +412,7 @@ export class DistributedLock {
           logger.warn(`Polled error result for key: ${key} from SQL lock.`);
           throw new Error(storedResult.error);
         }
+        logger.debug(`Polled cached result for key: ${key} from SQL lock.`);
         return { result: storedResult.value!, cached: true };
       }
       await new Promise((res) => setTimeout(res, retryInterval));

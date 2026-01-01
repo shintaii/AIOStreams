@@ -1,15 +1,16 @@
 import { z } from 'zod';
-import { ParsedId } from '../../utils/id-parser';
-import { constants, createLogger } from '../../utils';
-import { Torrent, NZB } from '../../debrid';
-import { SearchMetadata } from '../base/debrid';
+import { ParsedId } from '../../utils/id-parser.js';
+import { constants, createLogger, Env } from '../../utils/index.js';
+import { Torrent, NZB } from '../../debrid/index.js';
+import { SearchMetadata } from '../base/debrid.js';
 import { createHash } from 'crypto';
-import { BaseNabApi, SearchResultItem } from '../base/nab/api';
+import { BaseNabApi, SearchResultItem } from '../base/nab/api.js';
 import {
   BaseNabAddon,
   NabAddonConfigSchema,
   NabAddonConfig,
-} from '../base/nab/addon';
+} from '../base/nab/addon.js';
+import { BuiltinProxy, createProxy } from '../../proxy/index.js';
 
 const logger = createLogger('newznab');
 
@@ -19,20 +20,35 @@ class NewznabApi extends BaseNabApi<'newznab'> {
   }
 }
 
+export const NewznabAddonConfigSchema = NabAddonConfigSchema.extend({
+  proxyAuth: z.string().optional(),
+});
+export type NewznabAddonConfig = z.infer<typeof NewznabAddonConfigSchema>;
+
 // Addon class
-export class NewznabAddon extends BaseNabAddon<NabAddonConfig, NewznabApi> {
+export class NewznabAddon extends BaseNabAddon<NewznabAddonConfig, NewznabApi> {
   readonly name = 'Newznab';
   readonly version = '1.0.0';
   readonly id = 'newznab';
   readonly logger = logger;
   readonly api: NewznabApi;
-  constructor(userData: NabAddonConfig, clientIp?: string) {
-    super(userData, NabAddonConfigSchema, clientIp);
+  constructor(userData: NewznabAddonConfig, clientIp?: string) {
+    super(userData, NewznabAddonConfigSchema, clientIp);
+
     if (
-      !userData.services.find((s) => s.id === constants.TORBOX_SERVICE) ||
-      userData.services.length > 1
+      userData.services.some(
+        (s) =>
+          ![
+            constants.TORBOX_SERVICE,
+            constants.NZBDAV_SERVICE,
+            constants.ALTMOUNT_SERVICE,
+            constants.STREMIO_NNTP_SERVICE,
+          ].includes(s.id)
+      )
     ) {
-      throw new Error('The Newznab addon only supports TorBox');
+      throw new Error(
+        'The Newznab addon only supports TorBox and NZB DAV services'
+      );
     }
     this.api = new NewznabApi(
       this.userData.url,
@@ -45,7 +61,7 @@ export class NewznabAddon extends BaseNabAddon<NabAddonConfig, NewznabApi> {
     parsedId: ParsedId,
     metadata: SearchMetadata
   ): Promise<NZB[]> {
-    const results = await this.performSearch(parsedId, metadata);
+    const { results, meta } = await this.performSearch(parsedId, metadata);
     const seenNzbs = new Set<string>();
 
     const nzbs: NZB[] = [];
@@ -60,19 +76,58 @@ export class NewznabAddon extends BaseNabAddon<NabAddonConfig, NewznabApi> {
         createHash('md5').update(nzbUrl).digest('hex');
       const age = Math.ceil(
         Math.abs(new Date().getTime() - new Date(result.pubDate).getTime()) /
-          (1000 * 60 * 60 * 24)
+          (1000 * 60 * 60)
       );
 
       nzbs.push({
+        confirmed: meta.searchType === 'id',
         hash: md5,
         nzb: nzbUrl,
-        age: `${age}d`,
+        age: age,
         title: result.title,
+        indexer: result.newznab?.hydraIndexerName?.toString() ?? undefined,
         size:
           result.size ??
           (result.newznab?.size ? Number(result.newznab.size) : 0),
         type: 'usenet',
       });
+    }
+
+    if (this.userData.proxyAuth || Env.NZB_PROXY_PUBLIC_ENABLED) {
+      const auth = this.userData.proxyAuth
+        ? this.userData.proxyAuth
+        : `${constants.PUBLIC_NZB_PROXY_USERNAME}:${Env.AIOSTREAMS_AUTH.get(
+            constants.PUBLIC_NZB_PROXY_USERNAME
+          )}`;
+      try {
+        BuiltinProxy.validateAuth(auth);
+      } catch (error) {
+        throw new Error('Invalid AIOStreams Proxy Auth Credentials');
+      }
+      const proxy = createProxy({
+        id: constants.BUILTIN_SERVICE,
+        url: Env.BASE_URL,
+        credentials: auth,
+      });
+      const nzbsToProxy = nzbs.map((nzb) => ({
+        url: nzb.nzb,
+        filename: nzb.title,
+      }));
+      const proxiedUrls = await proxy.generateUrls(
+        nzbsToProxy.map(({ url, filename }) => ({
+          url,
+          filename: filename || url.split('/').pop(),
+          type: 'nzb',
+        })),
+        false // don't encrypt NZB URLs to make sure the URLs stay the same.
+      );
+      if (!proxiedUrls || 'error' in proxiedUrls) {
+        throw new Error('Failed to proxy NZBs: ' + proxiedUrls?.error || '');
+      }
+      for (let i = 0; i < nzbs.length; i++) {
+        nzbs[i].nzb = proxiedUrls[i];
+        nzbs[i].hash = createHash('md5').update(nzbs[i].nzb).digest('hex');
+      }
     }
     return nzbs;
   }

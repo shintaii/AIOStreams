@@ -1,8 +1,15 @@
-import { Addon, Option, UserData, Resource, Stream, ParsedStream } from '../db';
-import { Preset, baseOptions } from './preset';
-import { Env, SERVICE_DETAILS } from '../utils';
-import { constants, ServiceId } from '../utils';
-import { FileParser, StreamParser } from '../parser';
+import {
+  Addon,
+  Option,
+  UserData,
+  Resource,
+  Stream,
+  ParsedStream,
+} from '../db/index.js';
+import { Preset, baseOptions } from './preset.js';
+import { Env, SERVICE_DETAILS } from '../utils/index.js';
+import { constants, ServiceId } from '../utils/index.js';
+import { FileParser, StreamParser } from '../parser/index.js';
 
 class NuvioStreamsStreamParser extends StreamParser {
   parse(stream: Stream): ParsedStream {
@@ -106,11 +113,15 @@ export class NuvioStreamsPreset extends Preset {
       },
       {
         value: 'vidzee',
-        label: 'Vidzee',
+        label: 'VidZee',
       },
       {
         value: 'vidsrc',
-        label: 'Vidsrc',
+        label: 'VidSrc',
+      },
+      {
+        value: 'vixsrc',
+        label: 'VixSrc',
       },
       {
         value: 'mp4hydra',
@@ -188,6 +199,21 @@ export class NuvioStreamsPreset extends Preset {
         default: [],
       },
       {
+        id: 'mediaTypes',
+        name: 'Media Types',
+        description:
+          'Limits this addon to the selected media types for streams. For example, selecting "Movie" means this addon will only be used for movie streams (if the addon supports them). Leave empty to allow all.',
+        type: 'multi-select',
+        required: false,
+        showInSimpleMode: false,
+        options: [
+          { label: 'Movie', value: 'movie' },
+          { label: 'Series', value: 'series' },
+          { label: 'Anime', value: 'anime' },
+        ],
+        default: [],
+      },
+      {
         id: 'socials',
         name: '',
         description: '',
@@ -229,6 +255,7 @@ export class NuvioStreamsPreset extends Preset {
       name: options.name || this.METADATA.NAME,
       manifestUrl: this.generateManifestUrl(userData, options),
       enabled: true,
+      mediaTypes: options.mediaTypes || [],
       resources: options.resources || this.METADATA.SUPPORTED_RESOURCES,
       timeout: options.timeout || this.METADATA.TIMEOUT,
       preset: {

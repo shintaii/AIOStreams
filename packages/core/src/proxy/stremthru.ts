@@ -1,5 +1,5 @@
-import { BaseProxy, ProxyStream } from './base';
-import { createLogger, maskSensitiveInfo, Env } from '../utils';
+import { BaseProxy, ProxyStream } from './base.js';
+import { createLogger, maskSensitiveInfo, Env } from '../utils/index.js';
 
 const logger = createLogger('stremthru');
 
@@ -33,7 +33,8 @@ export class StremThruProxy extends BaseProxy {
   }
 
   protected async generateStreamUrls(
-    streams: ProxyStream[]
+    streams: ProxyStream[],
+    encrypt?: boolean
   ): Promise<string[] | null> {
     const proxyUrl = this.generateProxyUrl('/v0/proxy');
 

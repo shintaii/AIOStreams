@@ -1,6 +1,14 @@
 import { Parser } from 'expr-eval';
-import { ParsedStream, ParsedStreams, ParsedStreamSchema } from '../db';
+import {
+  ParsedStream,
+  ParsedStreams,
+  ParsedStreamSchema,
+  PassthroughStage,
+} from '../db/schemas.js';
 import bytes from 'bytes';
+import { formatZodError } from '../utils/config.js';
+import { ZodError } from 'zod';
+import { PASSTHROUGH_STAGES } from '../utils/constants.js';
 
 export abstract class StreamExpressionEngine {
   protected parser: Parser;
@@ -14,9 +22,9 @@ export abstract class StreamExpressionEngine {
         add: true,
         concatenate: false,
         conditional: true,
-        divide: false,
+        divide: true,
         factorial: false,
-        multiply: false,
+        multiply: true,
         power: false,
         remainder: false,
         subtract: true,
@@ -44,7 +52,7 @@ export abstract class StreamExpressionEngine {
         trunc: false,
         exp: false,
         length: false,
-        in: false,
+        in: true,
         random: false,
         min: true,
         max: true,
@@ -318,6 +326,33 @@ export abstract class StreamExpressionEngine {
       });
     };
 
+    this.parser.functions.age = function (
+      streams: ParsedStream[],
+      minAge?: number,
+      maxAge?: number
+    ) {
+      if (!Array.isArray(streams) || streams.some((stream) => !stream.type)) {
+        throw new Error('Your streams input must be an array of streams');
+      } else if (typeof minAge !== 'number' && typeof maxAge !== 'number') {
+        throw new Error('Min and max age must be a number');
+      } else if (minAge && minAge < 0) {
+        throw new Error('Min age cannot be negative');
+      } else if (maxAge && maxAge < 0) {
+        throw new Error('Max age cannot be negative');
+      } else if (minAge && maxAge && maxAge < minAge) {
+        throw new Error('Max age cannot be less than min age');
+      }
+      // select streams with age that lie within the range.
+      return streams.filter((stream) => {
+        if (minAge && (stream.age ?? 0) < minAge) {
+          return false;
+        }
+        if (maxAge && (stream.age ?? 0) > maxAge) {
+          return false;
+        }
+        return true;
+      });
+    };
     this.parser.functions.size = function (
       streams: ParsedStream[],
       minSize?: string | number,
@@ -381,13 +416,16 @@ export abstract class StreamExpressionEngine {
             'offcloud',
             'premiumize',
             'easynews',
+            'nzbdav',
+            'altmount',
+            'stremio_nntp',
             'easydebrid',
             'debrider',
           ].includes(s)
         )
       ) {
         throw new Error(
-          'Service must be a string and one of: realdebrid, debridlink, alldebrid, torbox, pikpak, seedr, offcloud, premiumize, easynews, easydebrid, debrider'
+          'Service must be a string and one of: realdebrid, debridlink, alldebrid, torbox, pikpak, seedr, offcloud, premiumize, easynews, nzbdav, altmount, easydebrid, debrider'
         );
       }
       return streams.filter((stream) =>
@@ -456,6 +494,89 @@ export abstract class StreamExpressionEngine {
       return streams.filter((stream) => stream.library);
     };
 
+    this.parser.functions.seadex = function (
+      streams: ParsedStream[],
+      filterType?: string
+    ) {
+      if (!Array.isArray(streams) || streams.some((stream) => !stream.type)) {
+        throw new Error('Your streams input must be an array of streams');
+      }
+
+      const filter = filterType?.toLowerCase() || 'all';
+
+      if (filter === 'best') {
+        // Only return SeaDex "best" releases
+        return streams.filter((stream) => stream.seadex?.isBest === true);
+      }
+
+      // Return all SeaDex releases (includes group fallback matches)
+      return streams.filter((stream) => stream.seadex?.isSeadex === true);
+    };
+
+    this.parser.functions.message = function (
+      streams: ParsedStream[],
+      mode: 'exact' | 'includes',
+      ...messages: string[]
+    ) {
+      if (!Array.isArray(streams) || streams.some((stream) => !stream.type)) {
+        throw new Error('Your streams input must be an array of streams');
+      } else if (
+        messages.length === 0 ||
+        messages.some((m) => typeof m !== 'string')
+      ) {
+        throw new Error(
+          'You must provide one or more message string parameters'
+        );
+      } else if (mode !== 'exact' && mode !== 'includes') {
+        throw new Error("Mode must be either 'exact' or 'includes'");
+      }
+      return streams.filter((stream) =>
+        mode == 'exact'
+          ? messages.includes(stream.message || '')
+          : messages.some((m) => (stream.message || '').includes(m))
+      );
+    };
+
+    this.parser.functions.passthrough = function (
+      streams: ParsedStream[],
+      ...stages: string[]
+    ) {
+      if (!Array.isArray(streams) || streams.some((stream) => !stream.type)) {
+        throw new Error('Your streams input must be an array of streams');
+      }
+
+      // Validate stages if provided
+      if (stages.length > 0) {
+        const validStages = PASSTHROUGH_STAGES as readonly string[];
+        const invalidStages = stages.filter((s) => !validStages.includes(s));
+        if (invalidStages.length > 0) {
+          throw new Error(
+            `Invalid passthrough stage(s): ${invalidStages.join(', ')}. Valid stages are: ${PASSTHROUGH_STAGES.join(', ')}`
+          );
+        }
+      }
+
+      for (const stream of streams) {
+        if (stages.length === 0) {
+          // No stages specified = passthrough all
+          stream.passthrough = true;
+        } else {
+          // Merge with existing passthrough stages if any
+          const existingStages: PassthroughStage[] = Array.isArray(
+            stream.passthrough
+          )
+            ? stream.passthrough
+            : [];
+          const newStages = new Set([
+            ...existingStages,
+            ...(stages as PassthroughStage[]),
+          ]);
+          stream.passthrough = Array.from(newStages) as PassthroughStage[];
+        }
+      }
+      return streams;
+    };
+
     this.parser.functions.count = function (streams: ParsedStream[]) {
       if (!Array.isArray(streams)) {
         throw new Error(
@@ -520,6 +641,9 @@ export abstract class StreamExpressionEngine {
         resolve(result);
       } catch (error) {
         clearTimeout(timeout);
+        if (error instanceof Error) {
+          error.message = `Expression could not be evaluated: ${error.message}`;
+        }
         reject(error);
       }
     });
@@ -550,14 +674,12 @@ export abstract class StreamExpressionEngine {
       parsedFile: {
         title: 'Test Title',
         year: '2024',
-        season: 1,
-        episode: 1,
         seasons: [1],
+        episodes: [1],
         resolution: '1080p',
         quality: 'BluRay',
         encode: 'x264',
         releaseGroup: 'TEST',
-        seasonEpisode: ['S01', 'E01'],
         visualTags: ['HDR'],
         audioTags: ['AAC'],
         audioChannels: ['2.0'],
@@ -570,7 +692,7 @@ export abstract class StreamExpressionEngine {
       filename: 'test.mkv',
       folderName: 'Test Folder',
       duration: 7200, // 2 hours in seconds
-      age: '1 day',
+      age: 24, // 1 day in hours
       message: 'Test message',
       torrent: {
         infoHash: 'test-hash',
@@ -600,6 +722,38 @@ export abstract class StreamExpressionEngine {
     };
 
     return { ...defaultStream, ...overrides };
+  }
+}
+
+export class ExitConditionEvaluator extends StreamExpressionEngine {
+  constructor(
+    private totalStreams: ParsedStream[],
+    private totalTimeTaken: number,
+    private queryType: string,
+    private queriedAddons: string[],
+    private allAddons: string[]
+  ) {
+    super();
+    this.parser.consts.totalStreams = this.totalStreams;
+    this.parser.consts.totalTimeTaken = this.totalTimeTaken;
+    this.parser.consts.queryType = this.queryType;
+    this.parser.consts.queriedAddons = this.queriedAddons;
+    this.parser.consts.allAddons = this.allAddons;
+  }
+
+  async evaluate(condition: string) {
+    return await this.evaluateCondition(condition);
+  }
+
+  static async testEvaluate(condition: string) {
+    const parser = new ExitConditionEvaluator(
+      [],
+      200,
+      'movie',
+      ['Test Addon'],
+      ['Test Addon']
+    );
+    return await parser.evaluate(condition);
   }
 }
 
@@ -642,8 +796,11 @@ export class GroupConditionEvaluator extends StreamExpressionEngine {
 }
 
 export class StreamSelector extends StreamExpressionEngine {
-  constructor() {
+  private queryType: string;
+  constructor(queryType: string) {
     super();
+    this.queryType = queryType;
+    this.parser.consts.queryType = queryType;
   }
 
   async select(
@@ -667,14 +824,14 @@ export class StreamSelector extends StreamExpressionEngine {
       selectedStreams = ParsedStreams.parse(selectedStreams);
     } catch (error) {
       throw new Error(
-        `Filter condition failed: ${error instanceof Error ? error.message : String(error)}`
+        `Result could not be parsed as stream array: ${formatZodError(error as ZodError)}`
       );
     }
     return selectedStreams;
   }
 
   static async testSelect(condition: string): Promise<ParsedStream[]> {
-    const parser = new StreamSelector();
+    const parser = new StreamSelector('movie');
     const streams = [
       parser.createTestStream({ type: 'debrid' }),
       parser.createTestStream({ type: 'debrid' }),

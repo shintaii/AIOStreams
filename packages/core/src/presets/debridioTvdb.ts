@@ -1,11 +1,11 @@
-import { Addon, Option, UserData } from '../db';
-import { CacheKeyRequestOptions, Preset, baseOptions } from './preset';
-import { constants, Env } from '../utils';
+import { Addon, Option, UserData } from '../db/index.js';
+import { CacheKeyRequestOptions, Preset, baseOptions } from './preset.js';
+import { constants, Env } from '../utils/index.js';
 import {
   debridioSocialOption,
   debridioApiKeyOption,
   debridioLogo,
-} from './debridio';
+} from './debridio.js';
 
 export class DebridioTvdbPreset extends Preset {
   static override get METADATA() {
@@ -37,6 +37,7 @@ export class DebridioTvdbPreset extends Preset {
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [],
       SUPPORTED_RESOURCES: supportedResources,
+      CATEGORY: constants.PresetCategory.META_CATALOGS,
     };
   }
 

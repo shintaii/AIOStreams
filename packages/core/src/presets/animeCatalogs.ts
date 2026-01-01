@@ -1,6 +1,6 @@
-import { Addon, Option, UserData } from '../db';
-import { CacheKeyRequestOptions, Preset, baseOptions } from './preset';
-import { constants, Env } from '../utils';
+import { Addon, Option, UserData } from '../db/index.js';
+import { CacheKeyRequestOptions, Preset, baseOptions } from './preset.js';
+import { constants, Env } from '../utils/index.js';
 
 export class AnimeCatalogsPreset extends Preset {
   private static malCatalogs = [
@@ -239,6 +239,7 @@ export class AnimeCatalogsPreset extends Preset {
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [],
       SUPPORTED_RESOURCES: supportedResources,
+      CATEGORY: constants.PresetCategory.META_CATALOGS,
     };
   }
 

@@ -6,40 +6,36 @@ import {
   Option,
   StreamProxyConfig,
   Group,
-} from '../db/schemas';
-import { AIOStreams } from '../main';
-import { Preset, PresetManager } from '../presets';
-import { createProxy } from '../proxy';
-import { constants } from '.';
-import { TMDBMetadata } from '../metadata/tmdb';
-import { isEncrypted, decryptString, encryptString } from './crypto';
-import { Env } from './env';
-import { createLogger, maskSensitiveInfo } from './logger';
-import { ZodError } from 'zod';
+  PresetMetadata,
+} from '../db/schemas.js';
+import { AIOStreams } from '../main.js';
+import { Preset, PresetManager } from '../presets/index.js';
+import { createProxy } from '../proxy/index.js';
+import { TMDBMetadata } from '../metadata/tmdb.js';
 import {
+  isEncrypted,
+  decryptString,
+  encryptString,
+  Env,
+  maskSensitiveInfo,
+  RPDB,
+  FeatureControl,
+  compileRegex,
+  constants,
+} from './index.js';
+import { z, ZodError } from 'zod';
+import {
+  ExitConditionEvaluator,
   GroupConditionEvaluator,
   StreamSelector,
-} from '../parser/streamExpression';
-import { RPDB } from './rpdb';
-import { FeatureControl } from './feature';
-import { compileRegex } from './regex';
+} from '../parser/streamExpression.js';
+import { createLogger } from './logger.js';
+import { TVDBMetadata } from '../metadata/tvdb.js';
 
 const logger = createLogger('core');
 
 export const formatZodError = (error: ZodError) => {
-  let errs = [];
-  for (const issue of error.issues) {
-    errs.push(
-      `Invalid value for ${issue.path.join('.')}: ${issue.message}${
-        (issue as any).unionErrors
-          ? `. Union checks performed:\n${(issue as any).unionErrors
-              .map((issue: any) => `- ${formatZodError(issue)}`)
-              .join('\n')}`
-          : ''
-      }`
-    );
-  }
-  return errs.join(' | ');
+  return z.prettifyError(error);
 };
 
 function getServiceCredentialDefault(
@@ -245,9 +241,8 @@ export function getEnvironmentServiceDetails(): typeof constants.SERVICE_DETAILS
             name: cred.name,
             description: cred.description,
             type: cred.type,
-            // remove required attribute from field to allow users to remove credentials.
-            // server will still validate.
-            required: false,
+            intent: cred.intent,
+            required: cred.required,
             default: getServiceCredentialDefault(service.id, cred.id)
               ? encryptString(getServiceCredentialDefault(service.id, cred.id)!)
                   .data
@@ -326,6 +321,18 @@ export async function validateConfig(
       );
     }
   }
+
+  // validate merged catalogs source limits
+  if (config.mergedCatalogs) {
+    for (const mergedCatalog of config.mergedCatalogs) {
+      if (mergedCatalog.catalogIds.length > Env.MAX_MERGED_CATALOG_SOURCES) {
+        throw new Error(
+          `Merged catalog "${mergedCatalog.name}" has ${mergedCatalog.catalogIds.length} source catalogs, but the maximum is ${Env.MAX_MERGED_CATALOG_SOURCES}`
+        );
+      }
+    }
+  }
+
   // now, validate preset options and service credentials.
 
   if (config.presets) {
@@ -355,6 +362,19 @@ export async function validateConfig(
   if (config.groups?.groupings) {
     for (const group of config.groups.groupings) {
       await validateGroup(group);
+    }
+  }
+
+  if (config.dynamicAddonFetching?.enabled) {
+    try {
+      if (!config.dynamicAddonFetching.condition) {
+        throw new Error('Missing condition');
+      }
+      await ExitConditionEvaluator.testEvaluate(
+        config.dynamicAddonFetching.condition
+      );
+    } catch (error) {
+      throw new Error(`Invalid dynamic addon fetching condition: ${error}`);
     }
   }
 
@@ -398,7 +418,25 @@ export async function validateConfig(
     }
   }
 
-  if (config.titleMatching?.enabled === true) {
+  const tmdbAuth =
+    config.tmdbApiKey ||
+    config.tmdbAccessToken ||
+    Env.TMDB_API_KEY ||
+    Env.TMDB_ACCESS_TOKEN;
+
+  const needTmdb =
+    config.titleMatching?.enabled ||
+    config.yearMatching?.enabled ||
+    config.digitalReleaseFilter;
+
+  if (needTmdb && !tmdbAuth) {
+    throw new Error(
+      'A TMDB API key or access token is required for the following features: title matching, year matching, and digital release filter'
+    );
+  }
+
+  // validate tmdb auth if it is needed or if it is provided in the config.
+  if (needTmdb || config.tmdbAccessToken || config.tmdbApiKey) {
     try {
       const tmdb = new TMDBMetadata({
         accessToken: config.tmdbAccessToken,
@@ -407,9 +445,25 @@ export async function validateConfig(
       await tmdb.validateAuthorisation();
     } catch (error) {
       if (!options?.skipErrorsFromAddonsOrProxies) {
-        throw new Error(`Invalid TMDB access token: ${error}`);
+        throw new Error(
+          `Failed to validate TMDB API Key/Access Token: ${error instanceof Error ? error.message : String(error)}`
+        );
       }
-      logger.warn(`Invalid TMDB access token: ${error}`);
+      logger.warn(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  if (config.tvdbApiKey) {
+    try {
+      const tvdb = new TVDBMetadata({
+        apiKey: config.tvdbApiKey,
+      });
+      await tvdb.validateApiKey();
+    } catch (error) {
+      if (!options?.skipErrorsFromAddonsOrProxies) {
+        throw new Error(`Invalid TVDB API key: ${error}`);
+      }
+      logger.warn(`Invalid TVDB API key: ${error}`);
     }
   }
 
@@ -503,6 +557,98 @@ export function applyMigrations(config: any): UserData {
       behaviour: 'parallel',
     };
   }
+
+  if (config.showStatistics || config.statisticsPosition) {
+    config.statistics = {
+      enabled: config.showStatistics ?? false,
+      position: config.statisticsPosition ?? 'bottom',
+      statsToShow: ['addon', 'filter'],
+      ...(config.statistics ?? {}),
+    };
+    delete config.showStatistics;
+    delete config.statisticsPosition;
+  }
+
+  const migrateHOSBS = (
+    type: 'preferred' | 'required' | 'excluded' | 'included'
+  ) => {
+    if (Array.isArray(config[type + 'Encodes'])) {
+      config[type + 'Encodes'] = config[type + 'Encodes'].filter(
+        (encode: string) => {
+          if (encode === 'H-OU' || encode === 'H-SBS') {
+            // add H-OU and H-SBS to visual tags if in encodes.
+            config[type + 'VisualTags'] = [
+              ...(config[type + 'VisualTags'] ?? []),
+              encode,
+            ];
+            // filter out H-OU and H-SBS from encodes
+            return false;
+          }
+          return true;
+        }
+      );
+    }
+  };
+
+  migrateHOSBS('preferred');
+  migrateHOSBS('required');
+  migrateHOSBS('excluded');
+  migrateHOSBS('included');
+
+  // migrate comparisons of queryType to 'anime' to 'anime.series' or 'anime.movie'
+  const migrateAnimeQueryTypeInExpression = (expr?: string) => {
+    if (typeof expr !== 'string') return expr as any;
+    // Replace equality comparisons
+    let updated = expr.replace(
+      /queryType\s*==\s*(["'])anime\1/g,
+      "(queryType == 'anime.series' or queryType == 'anime.movie')"
+    );
+    updated = updated.replace(
+      /(["'])anime\1\s*==\s*queryType/g,
+      "(queryType == 'anime.series' or queryType == 'anime.movie')"
+    );
+    // Replace inequality comparisons
+    updated = updated.replace(
+      /queryType\s*!=\s*(["'])anime\1/g,
+      "(queryType != 'anime.series' and queryType != 'anime.movie')"
+    );
+    updated = updated.replace(
+      /(["'])anime\1\s*!=\s*queryType/g,
+      "(queryType != 'anime.series' and queryType != 'anime.movie')"
+    );
+    return updated;
+  };
+
+  const expressionLists = [
+    'excludedStreamExpressions',
+    'requiredStreamExpressions',
+    'includedStreamExpressions',
+    'preferredStreamExpressions',
+  ] as const;
+
+  for (const key of expressionLists) {
+    if (Array.isArray((config as any)[key])) {
+      (config as any)[key] = (config as any)[key].map((expr: unknown) =>
+        typeof expr === 'string'
+          ? migrateAnimeQueryTypeInExpression(expr)
+          : expr
+      );
+    }
+  }
+
+  if (config.dynamicAddonFetching?.condition) {
+    config.dynamicAddonFetching.condition = migrateAnimeQueryTypeInExpression(
+      config.dynamicAddonFetching.condition
+    );
+  }
+
+  if (config.groups?.groupings) {
+    config.groups.groupings = config.groups.groupings.map((group: any) => ({
+      ...group,
+      condition: migrateAnimeQueryTypeInExpression(group.condition),
+    }));
+  }
+
   return config;
 }
 
@@ -628,9 +774,16 @@ function validateService(
 }
 
 function validatePreset(preset: PresetObject) {
-  const presetMeta = PresetManager.fromId(preset.type).METADATA;
+  const presetMeta = PresetManager.fromId(preset.type)
+    .METADATA as PresetMetadata;
 
   const optionMetas = presetMeta.OPTIONS;
+
+  if (presetMeta.DISABLED) {
+    throw new Error(
+      `Addon '${presetMeta.NAME}' is disabled: ${presetMeta.DISABLED.reason}`
+    );
+  }
 
   for (const optionMeta of optionMetas) {
     const optionValue = preset.options[optionMeta.id];
@@ -829,6 +982,9 @@ async function validateProxy(
   if (proxy.enabled) {
     if (!proxy.id) {
       throw new Error('Proxy ID is required');
+    }
+    if (proxy.id === constants.BUILTIN_SERVICE) {
+      proxy.url = Env.BASE_URL;
     }
     if (!proxy.url) {
       throw new Error('Proxy URL is required');

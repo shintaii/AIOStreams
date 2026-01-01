@@ -1,13 +1,15 @@
-import { Addon, Option, ParsedStream, Stream, UserData } from '../db';
-import { Preset, baseOptions } from './preset';
+import { Addon, Option, ParsedStream, Stream, UserData } from '../db/index.js';
+import { Preset, baseOptions } from './preset.js';
 import {
   Cache,
   constants,
   Env,
+  formatZodError,
   getSimpleTextHash,
   makeRequest,
-} from '../utils';
-import { StreamParser } from '../parser';
+} from '../utils/index.js';
+import { StreamParser } from '../parser/index.js';
+import z, { ZodError } from 'zod';
 
 const moreLikeThisManifests = Cache.getInstance<string, string>(
   'moreLikeThisManifests'
@@ -374,6 +376,7 @@ export class MoreLikeThisPreset extends Preset {
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [],
       SUPPORTED_RESOURCES: supportedResources,
+      CATEGORY: constants.PresetCategory.META_CATALOGS,
     };
   }
 
@@ -458,31 +461,28 @@ export class MoreLikeThisPreset extends Preset {
       return cachedManifest;
     }
 
-    const formData = new URLSearchParams();
-    Object.entries(config).forEach(([key, value]) => {
-      formData.append(key, value);
-    });
-
     try {
       const response = await makeRequest(`${url}/saveConfig`, {
         method: 'POST',
         timeout: 1000,
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Type': 'application/json',
           'User-Agent': this.METADATA.USER_AGENT,
         },
-        rawOptions: {
-          redirect: 'manual',
-        },
-        body: formData.toString(),
+        body: JSON.stringify(config),
       });
 
-      let manifestUrl = response.headers.get('Location');
-      if (response.status < 300 || response.status >= 400) {
+      if (!response.ok) {
         throw new Error(
           `${response.status} - ${response.statusText}: ${await response.text()}`
         );
       }
+
+      const data = z
+        .object({ manifestUrl: z.url() })
+        .parse(await response.json());
+
+      let manifestUrl = data.manifestUrl;
       if (!manifestUrl) {
         throw new Error('Manifest URL not present in redirect');
       }
@@ -498,8 +498,10 @@ export class MoreLikeThisPreset extends Preset {
       );
       return manifestUrl;
     } catch (error: any) {
+      let errMsg =
+        error instanceof ZodError ? formatZodError(error) : error.message;
       throw new Error(
-        `Failed to generate ${this.METADATA.NAME} manifest: ${error.message}`
+        `Failed to generate ${this.METADATA.NAME} manifest: ${errMsg}`
       );
     }
   }

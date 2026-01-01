@@ -8,11 +8,11 @@ import {
   PresetMinimalMetadata,
   PresetMetadata,
   ParsedFile,
-} from '../db';
-import { Preset, baseOptions } from './preset';
-import { Env, SERVICE_DETAILS } from '../utils';
-import { constants, ServiceId } from '../utils';
-import { FileParser, StreamParser } from '../parser';
+} from '../db/index.js';
+import { Preset, baseOptions } from './preset.js';
+import { Env, SERVICE_DETAILS } from '../utils/index.js';
+import { constants, ServiceId } from '../utils/index.js';
+import { FileParser, StreamParser } from '../parser/index.js';
 
 class WebStreamrStreamParser extends StreamParser {
   protected get indexerEmojis(): string[] {
@@ -126,7 +126,8 @@ export class WebStreamrPreset extends Preset {
         value: 'en',
       },
       {
-        label: '🇩🇪 German (Einschalten, KinoGer, MegaKino, MeineCloud, StreamKiste)',
+        label:
+          '🇩🇪 German (Einschalten, KinoGer, MegaKino, MeineCloud, StreamKiste)',
         value: 'de',
       },
       {
@@ -154,6 +155,21 @@ export class WebStreamrPreset extends Preset {
         supportedResources,
         Env.DEFAULT_WEBSTREAMR_TIMEOUT
       ),
+      {
+        id: 'mediaTypes',
+        name: 'Media Types',
+        description:
+          'Limits this addon to the selected media types for streams. For example, selecting "Movie" means this addon will only be used for movie streams (if the addon supports them). Leave empty to allow all.',
+        type: 'multi-select',
+        required: false,
+        showInSimpleMode: false,
+        options: [
+          { label: 'Movie', value: 'movie' },
+          { label: 'Series', value: 'series' },
+          { label: 'Anime', value: 'anime' },
+        ],
+        default: [],
+      },
       {
         id: 'providers',
         name: 'Providers',
@@ -216,6 +232,7 @@ export class WebStreamrPreset extends Preset {
       name: options.name || this.METADATA.NAME,
       manifestUrl: this.generateManifestUrl(userData, options),
       enabled: true,
+      mediaTypes: options.mediaTypes || [],
       resources: options.resources || this.METADATA.SUPPORTED_RESOURCES,
       timeout: options.timeout || this.METADATA.TIMEOUT,
       preset: {

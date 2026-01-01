@@ -1,7 +1,10 @@
-import { Cache } from './cache';
-import { HEADERS_FOR_IP_FORWARDING, INTERNAL_SECRET_HEADER } from './constants';
-import { Env } from './env';
-import { createLogger, maskSensitiveInfo } from './logger';
+import {
+  Cache,
+  HEADERS_FOR_IP_FORWARDING,
+  INTERNAL_SECRET_HEADER,
+  Env,
+  maskSensitiveInfo,
+} from './index.js';
 import {
   BodyInit,
   Dispatcher,
@@ -12,12 +15,13 @@ import {
   RequestInit,
 } from 'undici';
 import { socksDispatcher } from 'fetch-socks';
+import { createLogger } from './logger.js';
 
 const logger = createLogger('http');
 const urlCount = Cache.getInstance<string, number>(
   'url-count',
   undefined,
-  true
+  'memory'
 );
 
 export class PossibleRecursiveRequestError extends Error {
@@ -119,22 +123,40 @@ export async function makeRequest(url: string, options: RequestOptions) {
       urlObj.toString()
     )} with forwarded ip ${maskSensitiveInfo(options.forwardIp ?? 'none')} and headers ${maskSensitiveInfo(JSON.stringify(Object.fromEntries(headers)))}`
   );
-  let response = fetch(urlObj.toString(), {
-    ...options.rawOptions,
-    method: options.method,
-    body: options.body,
-    headers: headers,
-    dispatcher: useProxy
-      ? getProxyAgent(Env.ADDON_PROXY![proxyIndex])
-      : undefined,
-    signal: AbortSignal.timeout(options.timeout),
-  });
+  let response;
+  try {
+    response = await fetch(urlObj.toString(), {
+      ...options.rawOptions,
+      method: options.method,
+      body: options.body,
+      headers: headers,
+      dispatcher: useProxy
+        ? getProxyAgent(Env.ADDON_PROXY![proxyIndex])
+        : undefined,
+      signal: AbortSignal.timeout(options.timeout),
+    });
+  } catch (err) {
+    if (
+      err instanceof Error &&
+      err.name === 'TypeError' &&
+      err.message === 'fetch failed' &&
+      err.cause
+    ) {
+      let logParams: [string, Record<string, any>] = [
+        'Fetch failed due to network error',
+        err.cause,
+      ];
+      delete logParams[1].stack;
+      logger.error(...logParams);
+    }
+    throw err;
+  }
 
   return response;
 }
 
 const proxyAgents = new Map<string, Dispatcher>();
-function getProxyAgent(proxyUrl: string): Dispatcher | undefined {
+export function getProxyAgent(proxyUrl: string): Dispatcher | undefined {
   if (!proxyUrl) {
     return undefined;
   }
@@ -159,7 +181,7 @@ function getProxyAgent(proxyUrl: string): Dispatcher | undefined {
   return proxyAgent;
 }
 
-function shouldProxy(url: URL): {
+export function shouldProxy(url: URL): {
   useProxy: boolean;
   proxyIndex: number;
 } {
@@ -212,6 +234,8 @@ function shouldProxy(url: URL): {
             : -1;
       }
     }
+  } else {
+    proxyIndex = 0;
   }
 
   if (useProxy && Env.ADDON_PROXY[proxyIndex] === undefined) {

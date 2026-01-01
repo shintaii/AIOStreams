@@ -1,6 +1,7 @@
-import { Addon, Option, UserData } from '../db';
-import { Preset, baseOptions } from './preset';
-import { Env, RESOURCES } from '../utils';
+import { Addon, Option, UserData } from '../db/index.js';
+import { Preset, baseOptions } from './preset.js';
+import { Env, RESOURCES } from '../utils/index.js';
+import { constants } from '../utils/index.js';
 
 export class CustomPreset extends Preset {
   static override get METADATA() {
@@ -19,6 +20,56 @@ export class CustomPreset extends Preset {
         description: 'Provide the Manifest URL for this custom addon.',
         type: 'url',
         required: true,
+      },
+      {
+        id: 'timeout',
+        name: 'Timeout (ms)',
+        description: 'The timeout for this addon',
+        type: 'number',
+        default: Env.DEFAULT_TIMEOUT,
+        constraints: {
+          min: Env.MIN_TIMEOUT,
+          max: Env.MAX_TIMEOUT,
+          forceInUi: false,
+        },
+      },
+      {
+        id: 'resources',
+        name: 'Resources',
+        description:
+          'Optionally override the resources that are fetched from this addon ',
+        type: 'multi-select',
+        required: false,
+        showInSimpleMode: false,
+        default: undefined,
+        options: RESOURCES.map((resource) => ({
+          label: constants.RESOURCE_LABELS[resource],
+          value: resource,
+        })),
+      },
+      {
+        id: 'mediaTypes',
+        name: 'Media Types',
+        description:
+          'Limits this addon to the selected media types for streams. For example, selecting "Movie" means this addon will only be used for movie streams (if the addon supports them). Leave empty to allow all.',
+        type: 'multi-select',
+        required: false,
+        showInSimpleMode: false,
+        default: [],
+        options: [
+          {
+            label: 'Movie',
+            value: 'movie',
+          },
+          {
+            label: 'Series',
+            value: 'series',
+          },
+          {
+            label: 'Anime',
+            value: 'anime',
+          },
+        ],
       },
       {
         id: 'libraryAddon',
@@ -54,31 +105,6 @@ export class CustomPreset extends Preset {
         required: false,
         default: false,
       },
-      {
-        id: 'timeout',
-        name: 'Timeout',
-        description: 'The timeout for this addon',
-        type: 'number',
-        default: Env.DEFAULT_TIMEOUT,
-        constraints: {
-          min: Env.MIN_TIMEOUT,
-          max: Env.MAX_TIMEOUT,
-        },
-      },
-      {
-        id: 'resources',
-        name: 'Resources',
-        description:
-          'Optionally override the resources that are fetched from this addon ',
-        type: 'multi-select',
-        required: false,
-        showInNoobMode: false,
-        default: undefined,
-        options: RESOURCES.map((resource) => ({
-          label: resource,
-          value: resource,
-        })),
-      },
     ];
 
     return {
@@ -93,6 +119,7 @@ export class CustomPreset extends Preset {
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [],
       SUPPORTED_RESOURCES: [],
+      CATEGORY: constants.PresetCategory.MISC,
     };
   }
 
@@ -127,6 +154,7 @@ export class CustomPreset extends Preset {
       enabled: true,
       library: options.libraryAddon ?? false,
       resources: options.resources || undefined,
+      mediaTypes: options.mediaTypes || [],
       timeout: options.timeout || this.METADATA.TIMEOUT,
       preset: {
         id: '',

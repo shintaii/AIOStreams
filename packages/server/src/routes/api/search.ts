@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import {
   AIOStreams,
   AIOStreamResponse,
@@ -11,11 +11,14 @@ import {
   validateConfig,
   isEncrypted,
   decryptString,
+  createLogger,
+  ApiTransformer,
+  SearchApiResponseData,
+  SearchApiResultField,
+  StremioTransformer,
 } from '@aiostreams/core';
-import { streamApiRateLimiter } from '../../middlewares/ratelimit';
-import { createLogger } from '@aiostreams/core';
-import { ApiTransformer, ApiSearchResponseData } from '@aiostreams/core';
-import { ApiResponse, createResponse } from '../../utils/responses';
+import { streamApiRateLimiter } from '../../middlewares/ratelimit.js';
+import { ApiResponse, createResponse } from '../../utils/responses.js';
 import { z, ZodError } from 'zod';
 const router: Router = Router();
 
@@ -23,20 +26,33 @@ const logger = createLogger('server');
 
 router.use(streamApiRateLimiter);
 
+const SearchApiRequestSchema = z.object({
+  type: z.string(),
+  id: z.string(),
+  format: z.coerce.boolean().optional().default(false),
+  requiredFields: z
+    .union([z.array(SearchApiResultField), SearchApiResultField])
+    .optional()
+    .default([])
+    .transform((val) => {
+      if (Array.isArray(val)) {
+        return val;
+      }
+      return [val];
+    }),
+});
+
 router.get(
   '/',
   async (
     req: Request,
-    res: Response<ApiResponse<ApiSearchResponseData>>,
-    next
+    res: Response<ApiResponse<SearchApiResponseData>>,
+    next: NextFunction
   ) => {
     try {
-      const { type, id } = z
-        .object({
-          type: z.string(),
-          id: z.string(),
-        })
-        .parse(req.query);
+      const { type, id, requiredFields, format } = SearchApiRequestSchema.parse(
+        req.query
+      );
       let encodedUserData: string | undefined = z
         .string()
         .optional()
@@ -48,7 +64,7 @@ router.get(
 
       if (!encodedUserData && !auth) {
         throw new APIError(
-          constants.ErrorCode.BAD_REQUEST,
+          constants.ErrorCode.UNAUTHORIZED,
           undefined,
           `At least one of AIOStreams-User-Data or Authorization headers must be present`
         );
@@ -158,27 +174,41 @@ router.get(
         );
       }
       const transformer = new ApiTransformer(userData);
+      const stremioTransformer = format
+        ? new StremioTransformer(userData)
+        : null;
+      const response = await (
+        await new AIOStreams(userData).initialise()
+      ).getStreams(id, type);
+
+      const stremioData = await stremioTransformer?.transformStreams(response);
+      const stremioStreams = stremioData?.streams.filter(
+        (stream) =>
+          !['statistic', 'error'].includes(stream.streamData?.type || '')
+      );
+
+      const apiData = await transformer.transformStreams(
+        response,
+        requiredFields
+      );
+      if (stremioStreams && format) {
+        apiData.results = apiData.results.map((result, index) => {
+          const stream = stremioStreams[index];
+          return {
+            ...result,
+            name: stream?.name,
+            description: stream?.description,
+          };
+        });
+      }
 
       res.status(200).json(
-        createResponse<ApiSearchResponseData>({
+        createResponse<SearchApiResponseData>({
           success: true,
-          data: await transformer.transformStreams(
-            await (
-              await new AIOStreams(userData).initialise()
-            ).getStreams(id, type)
-          ),
+          data: apiData,
         })
       );
     } catch (error) {
-      if (error instanceof ZodError) {
-        next(
-          new APIError(
-            constants.ErrorCode.BAD_REQUEST,
-            undefined,
-            formatZodError(error)
-          )
-        );
-      }
       next(error);
     }
   }

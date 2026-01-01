@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import {
   cleanEnv,
   str,
@@ -13,9 +14,15 @@ import {
   port,
   EnvMissingError,
 } from 'envalid';
-import { ResourceManager } from './resources';
-import * as constants from './constants';
+import * as constants from './constants.js';
 import { randomBytes } from 'crypto';
+import fs from 'fs';
+import bytes from 'bytes';
+
+// Get __dirname equivalent in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 try {
   dotenv.config({ path: path.resolve(__dirname, '../../../../.env') });
 } catch (error) {
@@ -23,7 +30,19 @@ try {
 }
 let metadata: any = undefined;
 try {
-  metadata = ResourceManager.getResource('metadata.json') || {};
+  function getResource(resourceName: string) {
+    const filePath = path.join(
+      __dirname,
+      '../../../../',
+      'resources',
+      resourceName
+    );
+    if (!fs.existsSync(filePath)) {
+      throw new Error(`Resource ${resourceName} not found at ${filePath}`);
+    }
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  }
+  metadata = getResource('metadata.json') || {};
 } catch (error) {
   console.error('Error loading metadata.json file', error);
 }
@@ -136,6 +155,14 @@ const url = makeValidator((x) => {
   return removeTrailingSlash(x);
 });
 
+const size = makeValidator<number>((input: string) => {
+  const parsed = bytes.parse(input);
+  if (!parsed || Number.isNaN(parsed) || parsed < 0) {
+    throw new EnvError(`Invalid size input: "${input}"`);
+  }
+  return parsed;
+});
+
 export const forcedPort = makeValidator<string>((input: string) => {
   if (input === '') {
     return '';
@@ -163,10 +190,10 @@ const userAgent = makeValidator((x) => {
 });
 
 // comma separated list of alias:uuid
-const aliasedUUIDs = makeValidator((x) => {
+const aliasedUUIDs = makeExactValidator((x) => {
   try {
-    const aliases: Record<string, { uuid: string; password: string }> = {};
-    const parsed = x.split(',').map((x) => {
+    const aliases: Map<string, { uuid: string; password: string }> = new Map();
+    x.split(',').forEach((x) => {
       const [alias, uuid, password] = x.split(':');
       if (!alias || !uuid || !password) {
         throw new Error('Invalid alias:uuid:password pair');
@@ -177,7 +204,7 @@ const aliasedUUIDs = makeValidator((x) => {
       ) {
         throw new Error('Invalid UUID');
       }
-      aliases[alias] = { uuid, password };
+      aliases.set(alias, { uuid, password });
     });
     return aliases;
   } catch (e) {
@@ -192,6 +219,49 @@ const readonly = makeValidator((x) => {
     throw new EnvError('Readonly environment variable, cannot be set');
   }
   return x;
+});
+
+const proxyAuth = makeValidator((x) => {
+  if (typeof x !== 'string') {
+    throw new EnvError('Proxy auth must be a string');
+  }
+  // comma separated list of username:password
+  const userMap: Map<string, string> = new Map();
+  x.split(',').forEach((x) => {
+    const [username, password] = x.split(':');
+    if (!username || !password) {
+      throw new EnvError(
+        'Proxy auth must be a comma separated list of username:password pairs'
+      );
+    }
+    userMap.set(username, password);
+  });
+  return userMap;
+});
+
+const connectionLimits = makeValidator((x) => {
+  if (typeof x !== 'string') {
+    throw new EnvError('Connection limits must be a string');
+  }
+  // comma separated list of username:limit where limit is a number
+  const limitMap: Map<string, number> = new Map();
+  x.split(',').forEach((x) => {
+    const [username, limitStr] = x.split(':');
+    if (!username || !limitStr) {
+      throw new EnvError(
+        'Connection limits must be a comma separated list of username:limit pairs'
+      );
+    }
+    const limit = Number(limitStr);
+    if (limit === -1)
+      if (Number.isNaN(limit) || limit < 0 || !Number.isInteger(limit)) {
+        throw new EnvError(
+          'Connection limit must be a positive integer or 0 for unlimited'
+        );
+      }
+    limitMap.set(username, limit);
+  });
+  return limitMap;
 });
 
 const boolOrList = makeValidator((x) => {
@@ -230,6 +300,20 @@ const urlMappings = makeValidator<Record<string, string>>((x) => {
   }
   return mappings;
 });
+
+const boolOrChoice = <T extends string>(choices: T[]) =>
+  makeValidator<boolean | T>((input: string) => {
+    input = input.trim();
+    if (['true', 'false', '1', '0'].includes(input.toLowerCase())) {
+      return input.toLowerCase() === 'true' || input === '1';
+    }
+    if (choices.includes(input as T)) {
+      return input as T;
+    }
+    throw new EnvError(
+      `Invalid value: ${input}. Must be true, false or one of: ${choices.join(', ')}`
+    );
+  });
 
 export const Env = cleanEnv(process.env, {
   VERSION: readonly({
@@ -308,7 +392,7 @@ export const Env = cleanEnv(process.env, {
     desc: 'Port to run the addon on',
   }),
   PTT_PORT: port({
-    default: 3001,
+    default: 7070,
     desc: 'Port to run the PTT server on (only used on Windows)',
   }),
   PTT_SOCKET: str({
@@ -318,6 +402,10 @@ export const Env = cleanEnv(process.env, {
   CUSTOM_HTML: str({
     default: undefined,
     desc: 'Custom HTML for the addon',
+  }),
+  ALTERNATE_DESIGN: bool({
+    default: false,
+    desc: 'Alternate design for the frontend.',
   }),
   SECRET_KEY: secretKey({
     desc: 'Secret key for the addon, used for encryption and must be 64 characters of hex',
@@ -337,7 +425,7 @@ export const Env = cleanEnv(process.env, {
     desc: 'Redis URI for the addon',
   }),
   REDIS_TIMEOUT: num({
-    default: 500,
+    default: 5000,
     desc: 'Redis timeout for the addon',
   }),
   ADDON_PROXY: urlOrUrlList({
@@ -353,7 +441,7 @@ export const Env = cleanEnv(process.env, {
     desc: 'Mapping of URLs to another, converts requests to the original URL to the mapped URL',
   }),
   ALIASED_CONFIGURATIONS: aliasedUUIDs({
-    default: {},
+    default: new Map(),
     desc: 'Comma separated list of alias:uuid:encryptedPassword pairs. Can then access at /stremio/u/alias/manifest.json ',
   }),
   TRUSTED_UUIDS: str({
@@ -368,9 +456,17 @@ export const Env = cleanEnv(process.env, {
     default: undefined,
     desc: 'TMDB API Key. Used for fetching metadata for the strict title matching option.',
   }),
+  TVDB_API_KEY: str({
+    default: undefined,
+    desc: 'TVDB API Key. Used for fetching metadata.',
+  }),
   TRAKT_CLIENT_ID: str({
     default: undefined,
     desc: 'Trakt Client ID. Used for fetching Trakt aliases.',
+  }),
+  FETCH_TRAKT_ALIASES: bool({
+    default: true,
+    desc: 'Fetch Trakt aliases. Defaults to true.',
   }),
   PROVIDE_STREAM_DATA: boolOrList<boolean | string[] | undefined>({
     default: undefined,
@@ -559,6 +655,10 @@ export const Env = cleanEnv(process.env, {
     default: 20,
     desc: 'Max number of groups',
   }),
+  MAX_MERGED_CATALOG_SOURCES: num({
+    default: 10,
+    desc: 'Max number of source catalogs in a single merged catalog',
+  }),
 
   ALLOWED_REGEX_PATTERNS: json<string[]>({
     default: [],
@@ -587,7 +687,7 @@ export const Env = cleanEnv(process.env, {
   }),
 
   DEFAULT_TIMEOUT: num({
-    default: 10000,
+    default: 7000,
     desc: 'Default timeout for the addon',
   }),
   CATALOG_TIMEOUT: num({
@@ -1079,7 +1179,7 @@ export const Env = cleanEnv(process.env, {
   }),
 
   DEBRIDIO_TV_URL: url({
-    default: 'https://tv-addon.debridio.com',
+    default: 'https://tv.lb.debridio.com',
     desc: 'Debridio TV URL',
   }),
   DEFAULT_DEBRIDIO_TV_TIMEOUT: num({
@@ -1104,9 +1204,22 @@ export const Env = cleanEnv(process.env, {
     desc: 'Default Debridio Watchtower user agent',
   }),
 
+  DEBRIDIO_IC4A_URL: url({
+    default: 'https://ic4a.lb.debridio.com',
+    desc: 'Debridio IC4A URL',
+  }),
+  DEFAULT_DEBRIDIO_IC4A_TIMEOUT: num({
+    default: undefined,
+    desc: 'Default Debridio IC4A timeout',
+  }),
+  DEFAULT_DEBRIDIO_IC4A_USER_AGENT: userAgent({
+    default: undefined,
+    desc: 'Default Debridio IC4A user agent',
+  }),
+
   // StremThru Store settings
   STREMTHRU_STORE_URL: urlOrUrlList({
-    default: ['https://stremthru.13377001.xyz/'],
+    default: ['https://stremthru.13377001.xyz/stremio/store'],
     desc: 'StremThru Store URL',
   }),
   DEFAULT_STREMTHRU_STORE_TIMEOUT: num({
@@ -1170,9 +1283,18 @@ export const Env = cleanEnv(process.env, {
     default: undefined,
     desc: 'Default StreamFusion user agent',
   }),
-  DEFAULT_STREAMFUSION_STREMTHRU_URL: url({
-    default: 'https://stremthru.13377001.xyz',
-    desc: 'Default StreamFusion StremThru URL',
+
+  SOOTIO_URL: urlOrUrlList({
+    default: ['https://sootio.elfhosted.com'],
+    desc: 'Sootio URL',
+  }),
+  DEFAULT_SOOTIO_TIMEOUT: num({
+    default: undefined,
+    desc: 'Default Sootio timeout',
+  }),
+  DEFAULT_SOOTIO_USER_AGENT: userAgent({
+    default: undefined,
+    desc: 'Default Sootio user agent',
   }),
 
   // DMM Cast settings
@@ -1562,6 +1684,41 @@ export const Env = cleanEnv(process.env, {
     desc: 'Default AStream user agent',
   }),
 
+  AIOSTREAMS_AUTH: proxyAuth({
+    default: new Map<string, string>(),
+    desc: 'Authorisation credentials for this AIOStreams instance',
+  }),
+  AIOSTREAMS_AUTH_ADMINS: commaSeparated({
+    default: undefined,
+    desc: 'Comma separated list of admin usernames. If not set, all users are admins.',
+  }),
+  AIOSTREAMS_AUTH_CONNECTIONS_LIMIT: connectionLimits({
+    default: undefined,
+    desc: 'Connection limits for authenticated users',
+  }),
+
+  // NZB Proxy Settings (shared by generic and Easynews NZB proxying)
+  NZB_PROXY_PUBLIC_ENABLED: bool({
+    default: false,
+    desc: 'Whether to enable the public/generic NZB proxy (disabled by default for security)',
+  }),
+  NZB_PROXY_EASYNEWS_ENABLED: bool({
+    default: false,
+    desc: 'Whether to enable the Easynews NZB proxy endpoint (enabled by default)',
+  }),
+  NZB_PROXY_MAX_SIZE: size({
+    default: 20 * 1000 * 1000, // 20MB
+    desc: 'Maximum size of NZBs that can be proxied',
+  }),
+  NZB_PROXY_RATE_LIMIT_WINDOW: num({
+    default: 3600,
+    desc: 'NZB proxy rate limit window in seconds',
+  }),
+  NZB_PROXY_RATE_LIMIT_PER_USER: num({
+    default: 100,
+    desc: 'Maximum number of NZB proxy requests per user per window',
+  }),
+
   BUILTIN_STREMTHRU_URL: url({
     default: 'https://stremthru.13377001.xyz',
     desc: 'Builtin StremThru URL',
@@ -1574,6 +1731,57 @@ export const Env = cleanEnv(process.env, {
     default: 60 * 60, // 1 hour
     desc: 'Builtin Debrid playback link cache TTL',
   }),
+  BUILTIN_DEBRID_LIBRARY_CACHE_TTL: num({
+    default: 60 * 5, // 5 minutes
+    desc: 'Builtin Debrid NZB list cache TTL',
+  }),
+  BUILTIN_DEBRID_METADATA_STORE: str({
+    choices: ['redis', 'sql', 'memory'],
+    default: undefined,
+    desc: 'Builtin Debrid metadata store',
+  }),
+  BUILTIN_DEBRID_FILEINFO_STORE: boolOrChoice(['redis', 'sql', 'memory'])({
+    default: true,
+    desc: 'Builtin Debrid fileinfo store',
+  }),
+  BUILTIN_PLAYBACK_LINK_VALIDITY: num({
+    default: 1 * 24 * 60 * 60, // 1 day
+    desc: 'Builtin Debrid playback link validity',
+  }),
+  BUILTIN_SCRAPE_WITH_ALL_TITLES: boolOrList({
+    default: false,
+    desc: 'Whether to use alternative titles during scraping for built-in addons. Set to true, false, or a comma separated list of hostnames',
+  }),
+  BUILTIN_SCRAPE_TITLE_LIMIT: num({
+    default: 3,
+    desc: 'Builtin Scrape title limit',
+  }),
+  BUILTIN_SCRAPE_QUERY_CONCURRENCY: num({
+    default: 5,
+    desc: 'Builtin Scrape query concurrency limit',
+  }),
+
+  BUILTIN_GET_TORRENT_TIMEOUT: num({
+    default: 5000,
+    desc: 'Builtin Get Torrent timeout',
+  }),
+  BUILTIN_GET_TORRENT_CONCURRENCY: num({
+    default: 100,
+    desc: 'Builtin Get Torrent concurrency limit',
+  }),
+  BUILTIN_GET_TORRENT_LAZILY: bool({
+    default: true,
+    desc: 'Get the torrent links lazily (in the background). First search will return only the available results while torrent fetches happen in the background.',
+  }),
+  BUILTIN_TORRENT_METADATA_CACHE_TTL: num({
+    default: 7 * 24 * 60 * 60, // 7 days
+    desc: 'Builtin Torrent metadata cache TTL',
+  }),
+  BUILTIN_MINIMUM_BACKGROUND_REFRESH_INTERVAL: num({
+    default: 1 * 24 * 60 * 60, // 1 day
+    desc: 'Minimum interval between background refreshes for built-in addon search caches. Triggered during normal searches.',
+  }),
+
   BUILTIN_GDRIVE_CLIENT_ID: str({
     default: undefined,
     desc: 'Builtin GDrive client ID',
@@ -1620,37 +1828,32 @@ export const Env = cleanEnv(process.env, {
     desc: 'Whether to cache results separately for every user that is using their own search engines.',
   }),
 
-  BUILTIN_TORZNAB_SEARCH_TIMEOUT: num({
+  BUILTIN_NAB_SEARCH_TIMEOUT: num({
     default: 30000, // 30 seconds
-    desc: 'Builtin Torznab Search timeout',
+    desc: 'Builtin Torznab/Newznab Search timeout',
   }),
-  BUILTIN_TORZNAB_SEARCH_CACHE_TTL: num({
+  BUILTIN_NAB_SEARCH_CACHE_TTL: num({
     default: 7 * 24 * 60 * 60, // 7 days
-    desc: 'Builtin Torznab Search cache TTL',
+    desc: 'Builtin Torznab/Newznab Search cache TTL',
   }),
-  BUILTIN_TORZNAB_CAPABILITIES_CACHE_TTL: num({
+  BUILTIN_NAB_CAPABILITIES_CACHE_TTL: num({
     default: 14 * 24 * 60 * 60, // 14 days
-    desc: 'Builtin Torznab Capabilities cache TTL',
+    desc: 'Builtin Torznab/Newznab Capabilities cache TTL',
   }),
-
-  BUILTIN_NEWZNAB_SEARCH_TIMEOUT: num({
-    default: 30000, // 30 seconds
-    desc: 'Builtin Newznab Search timeout',
+  BUILTIN_NAB_USER_AGENT: userAgent({
+    default: undefined,
+    desc: 'Builtin Torznab/Newznab user agent',
   }),
-  BUILTIN_NEWZNAB_SEARCH_CACHE_TTL: num({
-    default: 7 * 24 * 60 * 60, // 7 days
-    desc: 'Builtin Newznab Search cache TTL',
-  }),
-  BUILTIN_NEWZNAB_CAPABILITIES_CACHE_TTL: num({
-    default: 14 * 24 * 60 * 60, // 14 days
-    desc: 'Builtin Newznab Capabilities cache TTL',
+  BUILTIN_NAB_MAX_PAGES: num({
+    default: 5,
+    desc: 'Maximum number of pages to fetch from Torznab/Newznab indexers during pagination',
   }),
 
   BUILTIN_ZILEAN_URL: url({
     default: 'https://zilean.elfhosted.com',
     desc: 'Builtin Zilean URL',
   }),
-  BUILTIN_ZILEAN_TIMEOUT: num({
+  BUILTIN_DEFAULT_ZILEAN_TIMEOUT: num({
     default: undefined,
     desc: 'Builtin Zilean timeout',
   }),
@@ -1659,9 +1862,53 @@ export const Env = cleanEnv(process.env, {
     default: 'https://feed.animetosho.org',
     desc: 'Builtin AnimeTosho URL',
   }),
-  BUILTIN_ANIMETOSHO_TIMEOUT: num({
+  BUILTIN_DEFAULT_ANIMETOSHO_TIMEOUT: num({
     default: undefined,
     desc: 'Builtin AnimeTosho timeout',
+  }),
+
+  BUILTIN_NEKOBT_URL: url({
+    default: 'https://nekobt.to/api/torznab',
+    desc: 'Builtin NekoBT URL',
+  }),
+  BUILTIN_DEFAULT_NEKOBT_TIMEOUT: num({
+    default: undefined,
+    desc: 'Builtin NekoBT timeout',
+  }),
+
+  BUILTIN_BITMAGNET_URL: url({
+    default: undefined,
+    desc: 'Builtin Bitmagnet URL',
+  }),
+  BUILTIN_DEFAULT_BITMAGNET_TIMEOUT: num({
+    default: undefined,
+    desc: 'Builtin Bitmagnet timeout',
+  }),
+
+  BUILTIN_JACKETT_URL: url({
+    default: undefined,
+    desc: 'Builtin Jackett URL',
+  }),
+  BUILTIN_JACKETT_API_KEY: str({
+    default: undefined,
+    desc: 'Builtin Jackett API Key',
+  }),
+  BUILTIN_DEFAULT_JACKETT_TIMEOUT: num({
+    default: undefined,
+    desc: 'Builtin Jackett timeout',
+  }),
+
+  BUILTIN_NZBHYDRA_URL: url({
+    default: undefined,
+    desc: 'Builtin NZBHydra URL',
+  }),
+  BUILTIN_NZBHYDRA_API_KEY: str({
+    default: undefined,
+    desc: 'Builtin NZBHydra API Key',
+  }),
+  BUILTIN_DEFAULT_NZBHYDRA_TIMEOUT: num({
+    default: undefined,
+    desc: 'Builtin NZBHydra timeout',
   }),
 
   BUILTIN_PROWLARR_URL: url({
@@ -1676,6 +1923,10 @@ export const Env = cleanEnv(process.env, {
     default: undefined,
     desc: 'Comma separated list of prowlarr indexers to use.',
   }),
+  BUILTIN_DEFAULT_PROWLARR_TIMEOUT: num({
+    default: undefined,
+    desc: 'Default timeout for the builtin Prowlarr addon.',
+  }),
   BUILTIN_PROWLARR_SEARCH_TIMEOUT: num({
     default: 30000, // 30 seconds
     desc: 'Builtin Prowlarr Search timeout',
@@ -1689,12 +1940,63 @@ export const Env = cleanEnv(process.env, {
     desc: 'Builtin Prowlarr Indexers cache TTL',
   }),
 
+  BUILTIN_DEFAULT_KNABEN_TIMEOUT: num({
+    default: undefined,
+    desc: 'Builtin Knaben timeout',
+  }),
+  BUILTIN_KNABEN_SEARCH_TIMEOUT: num({
+    default: 30000, // 30 seconds
+    desc: 'Builtin Knaben Search timeout',
+  }),
+  BUILTIN_KNABEN_SEARCH_CACHE_TTL: num({
+    default: 7 * 24 * 60 * 60, // 7 days
+    desc: 'Builtin Knaben Search cache TTL',
+  }),
+
+  // Easynews settings
+  BUILTIN_EASYNEWS_SEARCH_TIMEOUT: num({
+    default: 30000, // 30 seconds
+    desc: 'Builtin Easynews Search timeout',
+  }),
+  BUILTIN_EASYNEWS_SEARCH_CACHE_TTL: num({
+    default: 3600, // 1 hour - shorter TTL since Easynews content changes more frequently
+    desc: 'Builtin Easynews Search cache TTL',
+  }),
+  BUILTIN_EASYNEWS_SEARCH_MAX_PAGES: num({
+    default: 5,
+    desc: 'Maximum number of pages to fetch when paginating Easynews search results',
+  }),
+
+  BUILTIN_TORRENT_GALAXY_URL: url({
+    default: 'https://torrentgalaxy.space',
+    desc: 'Builtin Torrent Galaxy URL',
+  }),
+  BUILTIN_DEFAULT_TORRENT_GALAXY_TIMEOUT: num({
+    default: undefined,
+    desc: 'Builtin Torrent Galaxy timeout',
+  }),
+  BUILTIN_TORRENT_GALAXY_SEARCH_TIMEOUT: num({
+    default: 30000, // 30 seconds
+    desc: 'Builtin Torrent Galaxy Search timeout',
+  }),
+  BUILTIN_TORRENT_GALAXY_SEARCH_CACHE_TTL: num({
+    default: 7 * 24 * 60 * 60, // 7 days
+    desc: 'Builtin Torrent Galaxy Search cache TTL',
+  }),
+  BUILTIN_TORRENT_GALAXY_PAGE_LIMIT: num({
+    default: 5,
+    desc: 'The maximum number of pages to fetch.',
+  }),
   // Rate limiting settings
   DISABLE_RATE_LIMITS: bool({
     default: false,
     desc: 'Disable rate limiting',
   }),
-
+  RATE_LIMIT_STORE: str({
+    choices: ['memory', 'redis'],
+    default: 'memory',
+    desc: 'The store to use for rate limiting',
+  }),
   STATIC_RATE_LIMIT_WINDOW: num({
     default: 5, // 1 minute
     desc: 'Time window for static file serving rate limiting in seconds',
@@ -1779,12 +2081,12 @@ export const Env = cleanEnv(process.env, {
     default: 15, // allow 100 requests per IP per minute
     desc: 'Maximum number of requests allowed per IP within the time window',
   }),
-  GDRIVE_STREAM_RATE_LIMIT_WINDOW: num({
-    default: 5, // 1 minute
-    desc: 'Time window for Google Drive stream rate limiting in seconds',
+  EASYNEWS_NZB_RATE_LIMIT_WINDOW: num({
+    default: 60,
+    desc: 'Time window for Easynews NZB rate limiting in seconds',
   }),
-  GDRIVE_STREAM_RATE_LIMIT_MAX_REQUESTS: num({
-    default: 10, // allow 100 requests per IP per minute
-    desc: 'Maximum number of requests allowed per IP within the time window',
+  EASYNEWS_NZB_RATE_LIMIT_MAX_REQUESTS: num({
+    default: 15,
+    desc: 'Maximum number of Easynews NZB requests allowed per IP within the time window',
   }),
 });

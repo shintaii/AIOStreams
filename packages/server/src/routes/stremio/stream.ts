@@ -1,8 +1,15 @@
-import { Router, Request, Response } from 'express';
-import { AIOStreams, AIOStreamResponse, Env } from '@aiostreams/core';
-import { stremioStreamRateLimiter } from '../../middlewares/ratelimit';
-import { createLogger } from '@aiostreams/core';
-import { StremioTransformer } from '@aiostreams/core';
+import { Router, Request, Response, NextFunction } from 'express';
+import {
+  AIOStreams,
+  AIOStreamResponse,
+  Env,
+  createLogger,
+  StremioTransformer,
+  Cache,
+  IdParser,
+} from '@aiostreams/core';
+import { stremioStreamRateLimiter } from '../../middlewares/ratelimit.js';
+
 const router: Router = Router();
 
 const logger = createLogger('server');
@@ -11,7 +18,11 @@ router.use(stremioStreamRateLimiter);
 
 router.get(
   '/:type/:id.json',
-  async (req: Request, res: Response<AIOStreamResponse>, next) => {
+  async (
+    req: Request,
+    res: Response<AIOStreamResponse>,
+    next: NextFunction
+  ) => {
     // Check if we have user data (set by middleware in authenticated routes)
     if (!req.userData) {
       // Return a response indicating configuration is needed
@@ -34,14 +45,16 @@ router.get(
     try {
       const { type, id } = req.params;
 
+      const aiostreams = await new AIOStreams(req.userData).initialise();
+
+      const disableAutoplay = await aiostreams.shouldStopAutoPlay(type, id);
+
       res
         .status(200)
         .json(
           await transformer.transformStreams(
-            await (
-              await new AIOStreams(req.userData).initialise()
-            ).getStreams(id, type),
-            { provideStreamData }
+            await aiostreams.getStreams(id, type),
+            { provideStreamData, disableAutoplay }
           )
         );
     } catch (error) {

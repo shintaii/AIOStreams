@@ -7,10 +7,17 @@ import { cn } from '@/components/ui/core/styling';
 import React from 'react';
 import { PageControls } from '@/components/shared/page-controls';
 import { useMenu } from '@/context/menu';
-import { Button } from '@/components/ui/button';
-import { HeartIcon } from 'lucide-react';
+import { Button, IconButton } from '@/components/ui/button';
 import { useDisclosure } from '@/hooks/disclosure';
 import { DonationModal } from '@/components/shared/donation-modal';
+import { BiLogInCircle, BiLogOutCircle } from 'react-icons/bi';
+import { ConfigModal } from '@/components/config-modal';
+import { useUserData } from '@/context/userData';
+import { toast } from 'sonner';
+import {
+  ConfirmationDialog,
+  useConfirmationDialog,
+} from '@/components/shared/confirmation-dialog';
 
 type TopNavbarProps = {
   children?: React.ReactNode;
@@ -20,8 +27,21 @@ export function TopNavbar(props: TopNavbarProps) {
   const { children, ...rest } = props;
   const { selectedMenu } = useMenu();
   const donationModal = useDisclosure(false);
+  const signInModal = useDisclosure(false);
   const serverStatus = useStatus();
   const isOffline = !serverStatus.status;
+  const { userData, setUserData, uuid, setUuid, password, setPassword } =
+    useUserData();
+
+  const confirmClearConfig = useConfirmationDialog({
+    title: 'Sign Out',
+    description: 'Are you sure you want to sign out?',
+    onConfirm: () => {
+      setUserData(null);
+      setUuid(null);
+      setPassword(null);
+    },
+  });
 
   return (
     <>
@@ -46,18 +66,50 @@ export function TopNavbar(props: TopNavbarProps) {
               className="flex flex-1"
             ></div>
             {selectedMenu !== 'about' ? (
-              <div className="block lg:hidden">
-                <PageControls />
+              <div className="flex items-center gap-2 lg:hidden">
+                <PageControls
+                  middleContent={
+                    <IconButton
+                      icon={
+                        uuid && password ? (
+                          <BiLogOutCircle />
+                        ) : (
+                          <BiLogInCircle />
+                        )
+                      }
+                      intent="white-outline"
+                      rounded
+                      // className="hidden sm:inline-flex"
+                      size="md"
+                      onClick={() => {
+                        if (uuid && password) {
+                          confirmClearConfig.open();
+                        } else {
+                          signInModal.open();
+                        }
+                      }}
+                    />
+                  }
+                />
               </div>
             ) : (
               <div className="block lg:hidden absolute top-0 right-4">
                 <Button
-                  intent="alert-subtle"
+                  intent="primary-subtle"
                   size="md"
-                  leftIcon={<HeartIcon />}
-                  onClick={donationModal.open}
+                  iconClass="text-3xl"
+                  leftIcon={
+                    uuid && password ? <BiLogOutCircle /> : <BiLogInCircle />
+                  }
+                  onClick={() => {
+                    if (uuid && password) {
+                      confirmClearConfig.open();
+                    } else {
+                      signInModal.open();
+                    }
+                  }}
                 >
-                  Support Me
+                  {uuid && password ? 'Sign Out' : 'Sign In'}
                 </Button>
               </div>
             )}
@@ -67,6 +119,19 @@ export function TopNavbar(props: TopNavbarProps) {
           open={donationModal.isOpen}
           onOpenChange={donationModal.toggle}
         />
+        <ConfigModal
+          open={signInModal.isOpen}
+          onSuccess={() => {
+            signInModal.close();
+            toast.success('Signed in successfully');
+          }}
+          onOpenChange={(v) => {
+            if (!v) {
+              signInModal.close();
+            }
+          }}
+        />
+        <ConfirmationDialog {...confirmClearConfig} />
         <LayoutHeaderBackground />
       </div>
     </>

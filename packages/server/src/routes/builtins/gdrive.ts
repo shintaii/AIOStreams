@@ -1,7 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { AIOStreams, AIOStreamResponse, GDriveAddon } from '@aiostreams/core';
-import { stremioStreamRateLimiter } from '../../middlewares/ratelimit';
-import { createLogger } from '@aiostreams/core';
+import { createLogger, fromUrlSafeBase64, GDriveAddon } from '@aiostreams/core';
 const router: Router = Router();
 
 const logger = createLogger('server');
@@ -11,7 +9,7 @@ router.get(
   async (req: Request, res: Response, next: NextFunction) => {
     const { encodedConfig } = req.params;
     const config = encodedConfig
-      ? JSON.parse(Buffer.from(encodedConfig, 'base64').toString('utf-8'))
+      ? JSON.parse(fromUrlSafeBase64(encodedConfig))
       : undefined;
 
     try {
@@ -29,9 +27,7 @@ router.get(
   '/:encodedConfig/meta/:type/:id.json',
   async (req: Request, res: Response, next: NextFunction) => {
     const { encodedConfig, type, id } = req.params;
-    const config = JSON.parse(
-      Buffer.from(encodedConfig, 'base64').toString('utf-8')
-    );
+    const config = JSON.parse(fromUrlSafeBase64(encodedConfig));
 
     try {
       const addon = new GDriveAddon(config);
@@ -49,9 +45,7 @@ router.get(
   '/:encodedConfig/catalog/:type/:id{/:extras}.json',
   async (req: Request, res: Response, next: NextFunction) => {
     const { encodedConfig, type, id, extras } = req.params;
-    const config = JSON.parse(
-      Buffer.from(encodedConfig, 'base64').toString('utf-8')
-    );
+    const config = JSON.parse(fromUrlSafeBase64(encodedConfig));
 
     try {
       const addon = new GDriveAddon(config);
@@ -69,9 +63,7 @@ router.get(
   '/:encodedConfig/stream/:type/:id.json',
   async (req: Request, res: Response, next: NextFunction) => {
     const { encodedConfig, type, id } = req.params;
-    const config = JSON.parse(
-      Buffer.from(encodedConfig, 'base64').toString('utf-8')
-    );
+    const config = JSON.parse(fromUrlSafeBase64(encodedConfig));
 
     try {
       const addon = new GDriveAddon(config);

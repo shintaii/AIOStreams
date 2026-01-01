@@ -4,26 +4,29 @@ import {
   constants,
   createLogger,
   formatZodError,
-} from '@aiostreams/core';
-import {
   DebridError,
   PlaybackInfoSchema,
   getDebridService,
   ServiceAuthSchema,
+  fromUrlSafeBase64,
+  Cache,
+  PlaybackInfo,
+  ServiceAuth,
+  decryptString,
+  metadataStore,
+  fileInfoStore,
+  TitleMetadata,
+  FileInfoSchema,
+  getSimpleTextHash,
+  FileInfo,
 } from '@aiostreams/core';
 import { ZodError } from 'zod';
-import {
-  STATIC_DOWNLOAD_FAILED,
-  STATIC_DOWNLOADING,
-  STATIC_UNAVAILABLE_FOR_LEGAL_REASONS,
-  STATIC_CONTENT_PROXY_LIMIT_REACHED,
-  STATIC_INTERNAL_SERVER_ERROR,
-  STATIC_FORBIDDEN,
-  STATIC_UNAUTHORIZED,
-  STATIC_NO_MATCHING_FILE,
-} from '../../app';
+import { StaticFiles } from '../../app.js';
+import { corsMiddleware } from '../../middlewares/cors.js';
 const router: Router = Router();
 const logger = createLogger('server');
+
+router.use(corsMiddleware);
 
 // block HEAD requests
 router.use((req: Request, res: Response, next: NextFunction) => {
@@ -35,24 +38,79 @@ router.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 router.get(
-  '/playback/:encodedStoreAuth/:encodedPlaybackInfo/:filename',
+  '/playback/:encryptedStoreAuth/:fileInfo/:metadataId/:filename',
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { encodedStoreAuth, encodedPlaybackInfo, filename } = req.params;
-      if (!encodedStoreAuth || !encodedPlaybackInfo || !filename) {
+      const {
+        encryptedStoreAuth,
+        fileInfo: encodedFileInfo,
+        metadataId,
+        filename,
+      } = req.params;
+      if (!encodedFileInfo || !metadataId || !filename) {
         throw new APIError(
           constants.ErrorCode.BAD_REQUEST,
           undefined,
-          'Store auth, playback info and filename are required'
+          'Encrypted store auth, file info, metadata id and filename are required'
         );
       }
-      const playbackInfo = PlaybackInfoSchema.parse(
-        JSON.parse(Buffer.from(encodedPlaybackInfo, 'base64').toString('utf-8'))
-      );
+
+      let fileInfo: FileInfo | undefined;
+
+      try {
+        fileInfo = FileInfoSchema.parse(
+          JSON.parse(fromUrlSafeBase64(encodedFileInfo))
+        );
+      } catch (error: any) {
+        fileInfo = await fileInfoStore()?.get(encodedFileInfo);
+        if (!fileInfo) {
+          throw error;
+        }
+      }
+
+      const decryptedStoreAuth = decryptString(encryptedStoreAuth);
+      if (!decryptedStoreAuth.success) {
+        throw new APIError(
+          constants.ErrorCode.BAD_REQUEST,
+          undefined,
+          'Failed to decrypt store auth'
+        );
+      }
 
       const storeAuth = ServiceAuthSchema.parse(
-        JSON.parse(Buffer.from(encodedStoreAuth, 'base64').toString('utf-8'))
+        JSON.parse(decryptedStoreAuth.data)
       );
+      const metadata: TitleMetadata | undefined =
+        await metadataStore().get(metadataId);
+      if (!metadata) {
+        throw new APIError(
+          constants.ErrorCode.BAD_REQUEST,
+          undefined,
+          'Metadata not found'
+        );
+      }
+
+      logger.verbose(`Got metadata: ${JSON.stringify(metadata)}`);
+
+      const playbackInfo: PlaybackInfo =
+        fileInfo.type === 'torrent'
+          ? {
+              type: 'torrent',
+              metadata: metadata,
+              hash: fileInfo.hash,
+              sources: fileInfo.sources,
+              index: fileInfo.index,
+              filename: filename,
+            }
+          : {
+              type: 'usenet',
+              metadata: metadata,
+              hash: fileInfo.hash,
+              nzb: fileInfo.nzb,
+              easynewsUrl: fileInfo.easynewsUrl,
+              index: fileInfo.index,
+              filename: filename,
+            };
 
       const debridInterface = getDebridService(
         storeAuth.id,
@@ -62,40 +120,48 @@ router.get(
 
       let streamUrl: string | undefined;
       try {
-        streamUrl = await debridInterface.resolve(playbackInfo, filename);
+        streamUrl = await debridInterface.resolve(
+          playbackInfo,
+          filename,
+          fileInfo.cacheAndPlay ?? false
+        );
       } catch (error: any) {
-        let staticFile: string = STATIC_INTERNAL_SERVER_ERROR;
+        let staticFile: string = StaticFiles.INTERNAL_SERVER_ERROR;
         if (error instanceof DebridError) {
           logger.error(
-            `Got Debrid error during debrid resolve: ${error.code}: ${error.message}`
+            `[${storeAuth.id}] Got Debrid error during debrid resolve: ${error.code}: ${error.message}`,
+            { ...error, stack: undefined }
           );
           switch (error.code) {
             case 'UNAVAILABLE_FOR_LEGAL_REASONS':
-              staticFile = STATIC_UNAVAILABLE_FOR_LEGAL_REASONS;
+              staticFile = StaticFiles.UNAVAILABLE_FOR_LEGAL_REASONS;
               break;
             case 'STORE_LIMIT_EXCEEDED':
-              staticFile = STATIC_CONTENT_PROXY_LIMIT_REACHED;
+              staticFile = StaticFiles.STORE_LIMIT_EXCEEDED;
+              break;
+            case 'PAYMENT_REQUIRED':
+              staticFile = StaticFiles.PAYMENT_REQUIRED;
               break;
             case 'FORBIDDEN':
-              staticFile = STATIC_FORBIDDEN;
+              staticFile = StaticFiles.FORBIDDEN;
               break;
             case 'UNAUTHORIZED':
-              staticFile = STATIC_UNAUTHORIZED;
+              staticFile = StaticFiles.UNAUTHORIZED;
               break;
             case 'UNPROCESSABLE_ENTITY':
             case 'UNSUPPORTED_MEDIA_TYPE':
             case 'STORE_MAGNET_INVALID':
-              staticFile = STATIC_DOWNLOAD_FAILED;
+              staticFile = StaticFiles.DOWNLOAD_FAILED;
               break;
             case 'NO_MATCHING_FILE':
-              staticFile = STATIC_NO_MATCHING_FILE;
+              staticFile = StaticFiles.NO_MATCHING_FILE;
               break;
             default:
               break;
           }
         } else {
           logger.error(
-            `Got unknown error during debrid resolve: ${error.message}`
+            `[${storeAuth.id}] Got unknown error during debrid resolve: ${error.message}`
           );
         }
 
@@ -104,7 +170,7 @@ router.get(
       }
 
       if (!streamUrl) {
-        res.status(302).redirect(`/static/${STATIC_DOWNLOADING}`);
+        res.status(302).redirect(`/static/${StaticFiles.DOWNLOADING}`);
         return;
       }
 

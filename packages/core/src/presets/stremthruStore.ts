@@ -1,9 +1,16 @@
-import { Addon, Option, UserData, Resource, Stream, ParsedStream } from '../db';
-import { baseOptions, Preset } from './preset';
-import { Env } from '../utils';
-import { constants, ServiceId } from '../utils';
-import { StreamParser } from '../parser';
-import { StremThruPreset, StremThruStreamParser } from './stremthru';
+import {
+  Addon,
+  Option,
+  UserData,
+  Resource,
+  Stream,
+  ParsedStream,
+} from '../db/index.js';
+import { baseOptions, Preset } from './preset.js';
+import { Env } from '../utils/index.js';
+import { constants, ServiceId } from '../utils/index.js';
+import { StreamParser } from '../parser/index.js';
+import { StremThruPreset, StremThruStreamParser } from './stremthru.js';
 
 class StremthruStoreStreamParser extends StremThruStreamParser {
   protected override applyUrlModifications(
@@ -33,6 +40,26 @@ class StremthruStoreStreamParser extends StremThruStreamParser {
     }
     return super.applyUrlModifications(url);
   }
+
+  protected getStreamType(
+    stream: Stream,
+    service: ParsedStream['service'],
+    currentParsedStream: ParsedStream
+  ): ParsedStream['type'] {
+    if (stream.name?.includes('Usenet')) {
+      return constants.USENET_STREAM_TYPE;
+    }
+    return super.getStreamType(stream, service, currentParsedStream);
+  }
+
+  protected getInfoHash(
+    stream: Stream,
+    currentParsedStream: ParsedStream
+  ): string | undefined {
+    return currentParsedStream.type !== 'usenet'
+      ? stream.behaviorHints?.bingeGroup?.match(/[a-fA-F0-9]{40}$/)?.[0]
+      : undefined;
+  }
 }
 
 export class StremthruStorePreset extends StremThruPreset {
@@ -61,7 +88,7 @@ export class StremthruStorePreset extends StremThruPreset {
           'Optionally override the services that are used. If not specified, then the services that are enabled and supported will be used.',
         type: 'multi-select',
         required: false,
-        showInNoobMode: false,
+        showInSimpleMode: false,
         options: StremThruPreset.supportedServices.map((service) => ({
           value: service,
           label: constants.SERVICE_DETAILS[service].name,
@@ -70,11 +97,33 @@ export class StremthruStorePreset extends StremThruPreset {
         emptyIsUndefined: true,
       },
       {
+        id: 'mediaTypes',
+        name: 'Media Types',
+        description:
+          'Limits this addon to the selected media types for streams. For example, selecting "Movie" means this addon will only be used for movie streams (if the addon supports them). Leave empty to allow all.',
+        type: 'multi-select',
+        required: false,
+        showInSimpleMode: false,
+        options: [
+          { label: 'Movie', value: 'movie' },
+          { label: 'Series', value: 'series' },
+          { label: 'Anime', value: 'anime' },
+        ],
+        default: [],
+      },
+      {
         id: 'webDl',
         name: 'Web Downloads',
         description:
           'Include downloads from web hosters (e.g. Mega, Zippyshare) in results',
         type: 'boolean',
+      },
+      {
+        id: 'usenet',
+        name: 'Usenet',
+        description: 'Toggle Usenet functionality in catalogs and streams',
+        type: 'boolean',
+        default: false,
       },
       {
         id: 'socials',
@@ -138,6 +187,7 @@ export class StremthruStorePreset extends StremThruPreset {
         : undefined,
       manifestUrl: this.generateManifestUrl(userData, options, serviceId),
       enabled: true,
+      mediaTypes: options.mediaTypes || [],
       library: true,
       resources: options.resources || this.METADATA.SUPPORTED_RESOURCES,
       timeout: options.timeout || this.METADATA.TIMEOUT,
@@ -175,6 +225,7 @@ export class StremthruStorePreset extends StremThruPreset {
       hide_catalog: false,
       hide_stream: false,
       webdl: options.webDl ?? false,
+      usenet: options.usenet ?? false,
     });
 
     return `${url}${configString ? '/' + configString : ''}/manifest.json`;

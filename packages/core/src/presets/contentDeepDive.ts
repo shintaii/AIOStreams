@@ -1,7 +1,7 @@
-import { Addon, Option, ParsedStream, Stream, UserData } from '../db';
-import { Preset, baseOptions } from './preset';
-import { constants, Env } from '../utils';
-import { StreamParser } from '../parser';
+import { Addon, Option, ParsedStream, Stream, UserData } from '../db/index.js';
+import { Preset, baseOptions } from './preset.js';
+import { constants, Env } from '../utils/index.js';
+import { StreamParser } from '../parser/index.js';
 
 class ContentDeepDiveStreamParser extends StreamParser {
   protected getFilename(
@@ -69,6 +69,7 @@ export class ContentDeepDivePreset extends Preset {
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [],
       SUPPORTED_RESOURCES: supportedResources,
+      CATEGORY: constants.PresetCategory.MISC,
     };
   }
 

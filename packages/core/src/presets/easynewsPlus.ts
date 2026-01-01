@@ -1,7 +1,7 @@
-import { PresetMetadata } from '../db';
-import { EasynewsPreset } from './easynews';
-import { constants, Env } from '../utils';
-import { baseOptions } from './preset';
+import { PresetMetadata } from '../db/index.js';
+import { EasynewsPreset } from './easynews.js';
+import { constants, Env } from '../utils/index.js';
+import { baseOptions } from './preset.js';
 
 export class EasynewsPlusPreset extends EasynewsPreset {
   static override get METADATA(): PresetMetadata {
@@ -49,6 +49,21 @@ export class EasynewsPlusPreset extends EasynewsPreset {
               url: 'https://buymeacoffee.com/sleeyax',
             },
           ],
+        },
+        {
+          id: 'mediaTypes',
+          name: 'Media Types',
+          description:
+            'Limits this addon to the selected media types for streams. For example, selecting "Movie" means this addon will only be used for movie streams (if the addon supports them). Leave empty to allow all.',
+          type: 'multi-select',
+          required: false,
+          showInSimpleMode: false,
+          options: [
+            { label: 'Movie', value: 'movie' },
+            { label: 'Series', value: 'series' },
+            { label: 'Anime', value: 'anime' },
+          ],
+          default: [],
         },
       ],
     };

@@ -1,4 +1,4 @@
-import { constants, Env } from '..';
+import { constants, Env } from '../index.js';
 import {
   Meta,
   MetaPreview,
@@ -16,10 +16,10 @@ import {
   CatalogResponse,
   StreamResponse,
   ParsedMeta,
-} from '../db';
-import { createFormatter } from '../formatters';
-import { AIOStreamsError, AIOStreamsResponse } from '../main';
-import { createLogger } from '../utils';
+} from '../db/index.js';
+import { createFormatter } from '../formatters/index.js';
+import { AIOStreamsError, AIOStreamsResponse } from '../main.js';
+import { Cache, createLogger, getTimeTakenSincePoint } from '../utils/index.js';
 
 type ErrorOptions = {
   errorTitle?: string;
@@ -46,17 +46,19 @@ export class StremioTransformer {
   private async convertParsedStreamToStream(
     stream: ParsedStream,
     formatter: {
-      format: (stream: ParsedStream) => { name: string; description: string };
+      format: (
+        stream: ParsedStream
+      ) => Promise<{ name: string; description: string }>;
     },
     index: number,
-    provideStreamData: boolean
+    options?: { disableAutoplay?: boolean; provideStreamData?: boolean }
   ): Promise<AIOStream> {
     const { name, description } = stream.addon.formatPassthrough
       ? {
           name: stream.originalName || stream.addon.name,
           description: stream.originalDescription,
         }
-      : formatter.format(stream);
+      : await formatter.format(stream);
 
     const autoPlaySettings = {
       enabled: this.userData.autoPlay?.enabled ?? true,
@@ -123,13 +125,13 @@ export class StremioTransformer {
             return stream.parsedFile?.[attribute];
         }
       })
-      .filter((attribute) =>
-        attribute !== undefined &&
-        attribute !== null &&
-        Array.isArray(attribute)
-          ? attribute.length
-          : true
-      );
+      .flat()
+      .filter((attribute) => {
+        if (attribute === undefined || attribute === null) return false;
+        if (Array.isArray(attribute)) return attribute.length > 0;
+        return true;
+      });
+
     let bingeGroup: string | undefined;
     if (autoPlaySettings.enabled) {
       bingeGroup = Env.ADDON_ID;
@@ -155,11 +157,39 @@ export class StremioTransformer {
       ytId: stream.type === 'youtube' ? stream.ytId : undefined,
       externalUrl: stream.type === 'external' ? stream.externalUrl : undefined,
       sources: stream.type === 'p2p' ? stream.torrent?.sources : undefined,
+      nzbUrl:
+        stream.type === constants.STREMIO_USENET_STREAM_TYPE
+          ? stream.nzbUrl
+          : undefined,
+      servers:
+        stream.type === constants.STREMIO_USENET_STREAM_TYPE
+          ? stream.servers
+          : undefined,
+      rarUrls:
+        stream.type === constants.ARCHIVE_STREAM_TYPE
+          ? stream.rarUrls
+          : undefined,
+      zipUrls:
+        stream.type === constants.ARCHIVE_STREAM_TYPE
+          ? stream.zipUrls
+          : undefined,
+      '7zipUrls':
+        stream.type === constants.ARCHIVE_STREAM_TYPE
+          ? stream['7zipUrls']
+          : undefined,
+      tgzUrls:
+        stream.type === constants.ARCHIVE_STREAM_TYPE
+          ? stream.tgzUrls
+          : undefined,
+      tarUrls:
+        stream.type === constants.ARCHIVE_STREAM_TYPE
+          ? stream.tarUrls
+          : undefined,
       subtitles: stream.subtitles,
       behaviorHints: {
         countryWhitelist: stream.countryWhitelist,
         notWebReady: stream.notWebReady,
-        bingeGroup,
+        bingeGroup: options?.disableAutoplay ? undefined : bingeGroup,
         proxyHeaders:
           stream.requestHeaders || stream.responseHeaders
             ? {
@@ -171,7 +201,7 @@ export class StremioTransformer {
         videoSize: stream.size,
         filename: stream.filename,
       },
-      streamData: provideStreamData
+      streamData: options?.provideStreamData
         ? {
             type: stream.type,
             proxied: stream.proxied,
@@ -190,6 +220,8 @@ export class StremioTransformer {
             message: stream.message,
             regexMatched: stream.regexMatched,
             keywordMatched: stream.keywordMatched,
+            streamExpressionMatched: stream.streamExpressionMatched,
+            seadex: stream.seadex,
             id: stream.id,
           }
         : undefined,
@@ -201,31 +233,30 @@ export class StremioTransformer {
       streams: ParsedStream[];
       statistics: { title: string; description: string }[];
     }>,
-    options?: { provideStreamData: boolean }
+    options?: { provideStreamData?: boolean; disableAutoplay?: boolean }
   ): Promise<AIOStreamResponse> {
+    const formatter = createFormatter(this.userData);
     const {
       data: { streams, statistics },
       errors,
     } = response;
-    const { provideStreamData } = options ?? {};
+    const { provideStreamData, disableAutoplay } = options ?? {};
 
     let transformedStreams: AIOStream[] = [];
 
-    const formatter = createFormatter(this.userData);
-
-    logger.info(
-      `Transforming ${streams.length} streams, using formatter ${this.userData.formatter.id}`
-    );
+    const start = Date.now();
 
     transformedStreams = await Promise.all(
       streams.map((stream: ParsedStream, index: number) =>
-        this.convertParsedStreamToStream(
-          stream,
-          formatter,
-          index,
-          provideStreamData ?? false
-        )
+        this.convertParsedStreamToStream(stream, formatter, index, {
+          disableAutoplay: disableAutoplay ?? false,
+          provideStreamData: provideStreamData ?? false,
+        })
       )
+    );
+
+    logger.info(
+      `Transformed ${streams.length} streams using ${this.userData.formatter.id} formatter in ${getTimeTakenSincePoint(start)}`
     );
 
     // add errors to the end (if this.userData.hideErrors is false  or the resource is not in this.userData.hideErrorsForResources)
@@ -240,8 +271,8 @@ export class StremioTransformer {
       );
     }
 
-    if (this.userData.showStatistics) {
-      let position = this.userData.statisticsPosition || 'bottom';
+    if (this.userData.statistics?.enabled) {
+      let position = this.userData.statistics?.position || 'bottom';
       let statisticStreams = statistics.map((statistic) => ({
         name: statistic.title,
         description: statistic.description,
@@ -306,10 +337,10 @@ export class StremioTransformer {
 
   async transformMeta(
     response: AIOStreamsResponse<ParsedMeta | null>,
-    options?: { provideStreamData: boolean }
+    options?: { provideStreamData?: boolean; disableAutoplay?: boolean }
   ): Promise<MetaResponse | null> {
     const { data: meta, errors } = response;
-    const { provideStreamData } = options ?? {};
+    const { provideStreamData, disableAutoplay } = options ?? {};
 
     if (!meta && errors.length === 0) {
       return null;
@@ -326,7 +357,9 @@ export class StremioTransformer {
 
     // Create formatter for stream conversion if needed
     let formatter: {
-      format: (stream: ParsedStream) => { name: string; description: string };
+      format: (
+        stream: ParsedStream
+      ) => Promise<{ name: string; description: string }>;
     } | null = null;
     if (
       meta.videos?.some((video) => video.streams && video.streams.length > 0)
@@ -340,12 +373,10 @@ export class StremioTransformer {
         if (video.streams && video.streams.length > 0) {
           const transformedStreams = await Promise.all(
             video.streams.map((stream, index) =>
-              this.convertParsedStreamToStream(
-                stream,
-                formatter!,
-                index,
-                provideStreamData ?? false
-              )
+              this.convertParsedStreamToStream(stream, formatter!, index, {
+                disableAutoplay: disableAutoplay ?? false,
+                provideStreamData: provideStreamData ?? false,
+              })
             )
           );
           video.streams = transformedStreams as unknown as ParsedStream[];

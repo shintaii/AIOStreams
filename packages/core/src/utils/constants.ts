@@ -1,4 +1,4 @@
-import { Option } from '../db/schemas';
+import { Option, Resource } from '../db/schemas.js';
 
 export enum ErrorCode {
   // User API
@@ -21,6 +21,8 @@ export enum ErrorCode {
   METHOD_NOT_ALLOWED = 'METHOD_NOT_ALLOWED',
   RATE_LIMIT_EXCEEDED = 'RATE_LIMIT_EXCEEDED',
   BAD_REQUEST = 'BAD_REQUEST',
+  UNAUTHORIZED = 'UNAUTHORIZED',
+  FORBIDDEN = 'FORBIDDEN',
 }
 
 interface ErrorDetails {
@@ -89,6 +91,14 @@ export const ErrorMap: Record<ErrorCode, ErrorDetails> = {
     statusCode: 400,
     message: 'Bad request',
   },
+  [ErrorCode.UNAUTHORIZED]: {
+    statusCode: 401,
+    message: 'Unauthorized',
+  },
+  [ErrorCode.FORBIDDEN]: {
+    statusCode: 403,
+    message: 'Forbidden',
+  },
 };
 
 export class APIError extends Error {
@@ -116,6 +126,8 @@ export const INTERNAL_SECRET_HEADER = Buffer.from(
   'base64'
 ).toString('utf8');
 
+export const PUBLIC_NZB_PROXY_USERNAME = 'public_nzb_proxy_user';
+
 const API_VERSION = 1;
 
 export const REDIS_PREFIX = 'aiostreams:';
@@ -125,6 +137,7 @@ export const LIGHT_GDRIVE_FORMATTER = 'lightgdrive';
 export const MINIMALISTIC_GDRIVE_FORMATTER = 'minimalisticgdrive';
 export const TORRENTIO_FORMATTER = 'torrentio';
 export const TORBOX_FORMATTER = 'torbox';
+export const PRISM_FORMATTER = 'prism';
 export const CUSTOM_FORMATTER = 'custom';
 
 export const FORMATTERS = [
@@ -133,6 +146,7 @@ export const FORMATTERS = [
   MINIMALISTIC_GDRIVE_FORMATTER,
   TORRENTIO_FORMATTER,
   TORBOX_FORMATTER,
+  PRISM_FORMATTER,
   CUSTOM_FORMATTER,
 ] as const;
 
@@ -153,6 +167,11 @@ export const FORMATTER_DETAILS: Record<FormatterType, FormatterDetail> = {
     name: 'Light Google Drive',
     description:
       'A lighter version of the GDrive formatter, focused on asthetics',
+  },
+  [PRISM_FORMATTER]: {
+    id: PRISM_FORMATTER,
+    name: 'Prism',
+    description: 'An aesthetic formatter with every detail within 5 lines.',
   },
   [MINIMALISTIC_GDRIVE_FORMATTER]: {
     id: MINIMALISTIC_GDRIVE_FORMATTER,
@@ -191,6 +210,9 @@ const PIKPAK_SERVICE = 'pikpak';
 const OFFCLOUD_SERVICE = 'offcloud';
 const SEEDR_SERVICE = 'seedr';
 const EASYNEWS_SERVICE = 'easynews';
+const NZBDAV_SERVICE = 'nzbdav';
+const ALTMOUNT_SERVICE = 'altmount';
+const STREMIO_NNTP_SERVICE = 'stremio_nntp';
 
 const SERVICES = [
   REALDEBRID_SERVICE,
@@ -205,6 +227,9 @@ const SERVICES = [
   OFFCLOUD_SERVICE,
   SEEDR_SERVICE,
   EASYNEWS_SERVICE,
+  NZBDAV_SERVICE,
+  ALTMOUNT_SERVICE,
+  STREMIO_NNTP_SERVICE,
 ] as const;
 
 export const BUILTIN_SUPPORTED_SERVICES = [
@@ -217,6 +242,10 @@ export const BUILTIN_SUPPORTED_SERVICES = [
   DEBRIDER_SERVICE,
   PIKPAK_SERVICE,
   OFFCLOUD_SERVICE,
+  NZBDAV_SERVICE,
+  ALTMOUNT_SERVICE,
+  STREMIO_NNTP_SERVICE,
+  EASYNEWS_SERVICE,
 ] as const;
 
 export type ServiceId = (typeof SERVICES)[number];
@@ -224,8 +253,13 @@ export type BuiltinServiceId = (typeof BUILTIN_SUPPORTED_SERVICES)[number];
 
 export const MEDIAFLOW_SERVICE = 'mediaflow' as const;
 export const STREMTHRU_SERVICE = 'stremthru' as const;
+export const BUILTIN_SERVICE = 'builtin' as const;
 
-export const PROXY_SERVICES = [MEDIAFLOW_SERVICE, STREMTHRU_SERVICE] as const;
+export const PROXY_SERVICES = [
+  BUILTIN_SERVICE,
+  STREMTHRU_SERVICE,
+  MEDIAFLOW_SERVICE,
+] as const;
 export type ProxyServiceId = (typeof PROXY_SERVICES)[number];
 
 export const PROXY_SERVICE_DETAILS: Record<
@@ -237,13 +271,12 @@ export const PROXY_SERVICE_DETAILS: Record<
     credentialDescription: string;
   }
 > = {
-  [MEDIAFLOW_SERVICE]: {
-    id: MEDIAFLOW_SERVICE,
-    name: 'MediaFlow Proxy',
-    description:
-      '[MediaFlow Proxy](https://github.com/mhdzumair/mediaflow-proxy) is a high performance proxy server which supports HTTP, HLS, and more.',
+  [BUILTIN_SERVICE]: {
+    id: BUILTIN_SERVICE,
+    name: 'Builtin Proxy',
+    description: 'A proxy service that is built into the core of AIOStreams',
     credentialDescription:
-      'The value of your MediaFlow Proxy instance `API_PASSWORD` environment variable.',
+      'A valid username:password pair for this AIOStreams instance, defined in the `AIOSTREAMS_AUTH` environment variable.',
   },
   [STREMTHRU_SERVICE]: {
     id: STREMTHRU_SERVICE,
@@ -251,7 +284,15 @@ export const PROXY_SERVICE_DETAILS: Record<
     description:
       '[StremThru](https://github.com/MunifTanjim/stremthru) is a feature packed companion to Stremio which also offers a HTTP proxy, written in Go.',
     credentialDescription:
-      'A valid credential for your StremThru instance, defined in the `STREMTHRU_PROXY_AUTH` environment variable.',
+      'A valid username:password pair for your StremThru instance, defined in the `STREMTHRU_PROXY_AUTH` environment variable.',
+  },
+  [MEDIAFLOW_SERVICE]: {
+    id: MEDIAFLOW_SERVICE,
+    name: 'MediaFlow Proxy',
+    description:
+      '[MediaFlow Proxy](https://github.com/mhdzumair/mediaflow-proxy) is a high performance proxy server which supports HTTP, HLS, and more.',
+    credentialDescription:
+      'The value of your MediaFlow Proxy instance `API_PASSWORD` environment variable.',
   },
 };
 
@@ -356,6 +397,161 @@ const SERVICE_DETAILS: Record<
       },
     ],
   },
+  [STREMIO_NNTP_SERVICE]: {
+    id: STREMIO_NNTP_SERVICE,
+    name: 'Stremio NNTP',
+    shortName: 'SN',
+    knownNames: ['SN', 'Stremio NNTP', 'StremioNntp', 'Stremio-NNTP'],
+    signUpText:
+      "Stream usenet directly from your provider via Stremio's NNTP client.",
+    credentials: [
+      {
+        id: 'note',
+        name: '',
+        description: `This is a new Stremio feature that allows Stremio to connect directly to Usenet NNTP servers you provide. It is currently [only supported on Stremio V5 Desktop](https://blog.stremio.com/stremio-new-stream-sources-usenet-rar-zip-ftp-and-more/).`,
+        type: 'alert',
+        intent: 'warning',
+      },
+      {
+        id: 'servers',
+        name: 'NNTP Servers',
+        description: 'Provide your Usenet NNTP server addresses',
+        type: 'custom-nntp-servers',
+        required: true,
+      },
+    ],
+  },
+  [NZBDAV_SERVICE]: {
+    id: NZBDAV_SERVICE,
+    name: 'NzbDAV',
+    shortName: 'ND',
+    knownNames: ['ND'],
+    signUpText: 'Stream usenet directly from your provider via Nzb DAV.',
+    credentials: [
+      {
+        id: 'note',
+        name: 'Configuration Help',
+        description: `**URL:** Use internal URL for local setups (e.g., http://nzbdav:3000), otherwise use a public URL.\n\n**Public URL:** Only needed if URL is local but streams need to be publicly accessible. Leave blank if URL is public or using a proxy.\n\n**Security Note:** WebDAV credentials are exposed in stream URLs unless proxied. To proxy, provide the Auth Token below (built-in proxy only).\n\nFor detailed setup instructions, see the [Usenet Wiki](https://github.com/Viren070/AIOStreams/wiki/Usenet#configuring-the-service-in-aiostreams).`,
+        type: 'alert',
+        intent: 'info',
+        required: false,
+      },
+      {
+        id: 'url',
+        name: 'NzbDAV URL',
+        description:
+          'The base URL of your NZB DAV instance. E.g., http://nzbdav:3000',
+        type: 'string',
+        required: true,
+      },
+      {
+        id: 'publicUrl',
+        name: 'Public NzbDAV URL (Optional)',
+        description:
+          'The public URL of your NzbDAV instance. Optional, see note above for details.',
+        type: 'string',
+        required: false,
+      },
+      {
+        id: 'apiKey',
+        name: 'NzbDAV API Key',
+        description:
+          'Your Nzb DAV API Key, found in the SABnzbd section in settings.',
+        type: 'password',
+        required: true,
+      },
+      {
+        id: 'username',
+        name: 'NzbDAV WebDAV Username',
+        description:
+          'Your Nzb DAV WebDAV Username. Found in the WebDAV section in settings.',
+        type: 'string',
+        required: false,
+      },
+      {
+        id: 'password',
+        name: 'NzbDAV WebDAV Password',
+        description:
+          'Your NzbDAV WebDAV Password. Found in the WebDAV section in settings.',
+        type: 'password',
+        required: false,
+      },
+      {
+        id: 'aiostreamsAuth',
+        name: 'AIOStreams Auth Token (Optional)',
+        description:
+          'If you would like to proxy your NzbDAV streams, you will need to provide a username:password pair for your AIOStreams instance, defined in the `AIOSTREAMS_AUTH` environment variable. **Other proxies will not work and you must define it here only**',
+        type: 'password',
+        required: false,
+      },
+    ],
+  },
+  [ALTMOUNT_SERVICE]: {
+    id: ALTMOUNT_SERVICE,
+    name: 'AltMount',
+    shortName: 'AM',
+    knownNames: ['AM'],
+    signUpText: 'Stream usenet directly from your provider via AltMount.',
+    credentials: [
+      {
+        id: 'note',
+        name: 'Configuration Help',
+        description: `**URL:** Use internal URL for local setups (e.g., http://altmount:8000), otherwise use a public URL.\n\n**Public URL:** Only needed if URL is local but streams need to be publicly accessible. Leave blank if URL is public or using a proxy.\n\n**Security Note:** WebDAV credentials are exposed in stream URLs unless proxied. To proxy, provide the Auth Token below (built-in proxy only).\n\nFor detailed setup instructions, see the [Usenet Wiki](https://github.com/Viren070/AIOStreams/wiki/Usenet#configuring-the-service-in-aiostreams).`,
+        type: 'alert',
+        intent: 'info',
+        required: false,
+      },
+      {
+        id: 'url',
+        name: 'Altmount URL',
+        description:
+          'The base URL of your AltMount instance used for requests. e.g., http://altmount:8080',
+        type: 'string',
+        required: true,
+      },
+      {
+        id: 'publicUrl',
+        name: 'Public Altmount URL',
+        description:
+          'The public URL of your AltMount instance. Optional, see note above for details.',
+        type: 'string',
+        required: false,
+      },
+      {
+        id: 'apiKey',
+        name: 'AltMount API Key',
+        description:
+          'Your AltMount API Key, found at `Configuration -> System` in the AltMount Web UI.',
+        type: 'password',
+        required: true,
+      },
+      {
+        id: 'username',
+        name: 'AltMount WebDAV Username',
+        description:
+          'Your AltMount WebDAV Username, found at `Configuration -> WebDAV Server` in the AltMount Web UI.',
+        type: 'string',
+        required: true,
+      },
+      {
+        id: 'password',
+        name: 'AltMount WebDAV Password',
+        description:
+          'Your AltMount WebDAV Password, found at `Configuration -> WebDAV Server` in the AltMount Web UI.',
+        type: 'password',
+        required: true,
+      },
+      {
+        id: 'aiostreamsAuth',
+        name: 'AIOStreams Auth Token (Optional)',
+        description:
+          'If you would like to proxy your AltMount streams, you will need to provide a username:password pair for your AIOStreams instance, defined in the `AIOSTREAMS_AUTH` environment variable. **Other proxies will not work and you must define it here only**',
+        type: 'password',
+        required: false,
+      },
+    ],
+  },
+
   [OFFCLOUD_SERVICE]: {
     id: OFFCLOUD_SERVICE,
     name: 'Offcloud',
@@ -518,6 +714,35 @@ const SERVICE_DETAILS: Record<
   },
 };
 
+const TOP_LEVEL_OPTION_DETAILS: Record<
+  'tmdbApiKey' | 'tmdbAccessToken' | 'rpdbApiKey' | 'tvdbApiKey',
+  {
+    name: string;
+    description: string;
+  }
+> = {
+  tmdbApiKey: {
+    name: 'TMDB API Key',
+    description:
+      'Get your free API key from [here](https://www.themoviedb.org/settings/api). Make sure to copy the 32 character API Key and not the Read Access Token.',
+  },
+  tmdbAccessToken: {
+    name: 'TMDB Access Token',
+    description:
+      'Get your free access token from [here](https://www.themoviedb.org/settings/api). Make sure to copy the Read Access Token and not the 32 character API Key.',
+  },
+  rpdbApiKey: {
+    name: 'RPDB API Key',
+    description:
+      'Get your free API key from [here](https://ratingposterdb.com/api-key/) for posters with ratings.',
+  },
+  tvdbApiKey: {
+    name: 'TVDB API Key',
+    description:
+      'Sign up for a free API Key at [TVDB](https://www.thetvdb.com/api-information) and then get it from your [dashboard](https://www.thetvdb.com/dashboard/account/apikeys).',
+  },
+};
+
 export const DEDUPLICATOR_KEYS = [
   'filename',
   'infoHash',
@@ -540,11 +765,8 @@ export const AUTO_PLAY_ATTRIBUTES = [
   'size',
 ] as const;
 
-const NON_DEFAULT_AUTO_PLAY_ATTRIBUTES = ['infoHash', 'size', 'type', 'addon'];
-
-export const DEFAULT_AUTO_PLAY_ATTRIBUTES = AUTO_PLAY_ATTRIBUTES.filter(
-  (attribute) => !NON_DEFAULT_AUTO_PLAY_ATTRIBUTES.includes(attribute)
-);
+export const DEFAULT_AUTO_PLAY_ATTRIBUTES: (typeof AUTO_PLAY_ATTRIBUTES)[number][] =
+  ['resolution', 'quality', 'releaseGroup'] as const;
 
 export const AUTO_PLAY_METHODS = [
   'matchingFile',
@@ -613,11 +835,14 @@ const VISUAL_TAGS = [
   'HDR10',
   'DV',
   'HDR',
+  'HLG',
   '10bit',
   '3D',
   'IMAX',
   'AI',
   'SDR',
+  'H-OU',
+  'H-SBS',
   'Unknown',
 ] as const;
 
@@ -625,6 +850,7 @@ const AUDIO_TAGS = [
   'Atmos',
   'DD+',
   'DD',
+  'DTS:X',
   'DTS-HD MA',
   'DTS-HD',
   'DTS-ES',
@@ -638,14 +864,27 @@ const AUDIO_TAGS = [
 
 const AUDIO_CHANNELS = ['2.0', '5.1', '6.1', '7.1', 'Unknown'] as const;
 
+// Passthrough stages that can be selectively bypassed
+const PASSTHROUGH_STAGES = [
+  'filter', // bypass main filtering (shouldKeepStream)
+  'dedup', // bypass deduplication
+  'limit', // bypass result limiting
+  'excluded', // bypass excluded stream expressions
+  'required', // bypass required stream expressions
+  'title', // bypass title matching
+  'year', // bypass year matching
+  'episode', // bypass season/episode matching
+  'digitalRelease', // bypass early digital release filter
+] as const;
+
 const ENCODES = [
   'AV1',
   'HEVC',
   'AVC',
   'XviD',
   'DivX',
-  'H-OU',
-  'H-SBS',
+  // 'H-OU',
+  // 'H-SBS',
   'Unknown',
 ] as const;
 
@@ -661,12 +900,15 @@ const SORT_CRITERIA = [
   'size',
   'service',
   'seeders',
+  'private',
+  'age',
   'addon',
   'regexPatterns',
   'cached',
   'library',
   'keyword',
   'streamExpressionMatched',
+  'seadex',
 ] as const;
 
 export const MIN_SIZE = 0;
@@ -675,13 +917,25 @@ export const MAX_SIZE = 100 * 1000 * 1000 * 1000; // 100GB
 export const MIN_SEEDERS = 0;
 export const MAX_SEEDERS = 1000;
 
+export const MIN_AGE_HOURS = 0;
+export const MAX_AGE_HOURS = 6480 * 24; // 6480 days (approx 18 years)
+
 export const DEFAULT_POSTERS = [
   'aHR0cHM6Ly93d3cucG5nbWFydC5jb20vZmlsZXMvMTEvUmlja3JvbGxpbmctUE5HLVBpYy5wbmc=',
 ];
 
 export const DEFAULT_YT_ID = 'eHZGWmpvNVBnRzA=';
 
-export const SORT_CRITERIA_DETAILS = {
+export const SORT_CRITERIA_DETAILS: Record<
+  (typeof SORT_CRITERIA)[number],
+  {
+    name: string;
+    description: string;
+    defaultDirection: 'asc' | 'desc';
+    ascendingDescription: string;
+    descendingDescription: string;
+  }
+> = {
   quality: {
     name: 'Quality',
     description: 'Sort by the quality of the stream',
@@ -776,6 +1030,22 @@ export const SORT_CRITERIA_DETAILS = {
     ascendingDescription: 'Streams with fewer seeders are preferred',
     descendingDescription: 'Streams with more seeders are preferred',
   },
+  private: {
+    name: 'Private',
+    description: 'Whether the stream is from a private tracker or not',
+    defaultDirection: 'desc',
+    ascendingDescription:
+      'Streams that are not from private trackers are preferred',
+    descendingDescription:
+      'Streams that are from private trackers are preferred',
+  },
+  age: {
+    name: 'Age',
+    description: 'Sort by the age of the stream',
+    defaultDirection: 'desc',
+    ascendingDescription: 'Newer streams are preferred',
+    descendingDescription: 'Older streams are preferred',
+  },
   addon: {
     name: 'Addon',
     description: 'Sort by the addon order',
@@ -826,12 +1096,23 @@ export const SORT_CRITERIA_DETAILS = {
     descendingDescription:
       'Streams that match your stream expressions are preferred and ranked by the order of your stream expressions',
   },
+  seadex: {
+    name: 'SeaDex',
+    defaultDirection: 'desc',
+    description:
+      'Whether the stream is a SeaDex release (curated best anime releases from releases.moe)',
+    ascendingDescription: 'Streams that are not listed on SeaDex are preferred',
+    descendingDescription:
+      'Streams that are marked as the Best release on SeaDex are preferred, followed by the Alternative release',
+  },
 } as const;
 
 const SORT_DIRECTIONS = ['asc', 'desc'] as const;
 
 export const P2P_STREAM_TYPE = 'p2p' as const;
 export const LIVE_STREAM_TYPE = 'live' as const;
+export const STREMIO_USENET_STREAM_TYPE = 'stremio-usenet' as const;
+export const ARCHIVE_STREAM_TYPE = 'archive' as const;
 export const USENET_STREAM_TYPE = 'usenet' as const;
 export const DEBRID_STREAM_TYPE = 'debrid' as const;
 export const HTTP_STREAM_TYPE = 'http' as const;
@@ -843,6 +1124,8 @@ export const STATISTIC_STREAM_TYPE = 'statistic' as const;
 const STREAM_TYPES = [
   P2P_STREAM_TYPE,
   LIVE_STREAM_TYPE,
+  STREMIO_USENET_STREAM_TYPE,
+  ARCHIVE_STREAM_TYPE,
   USENET_STREAM_TYPE,
   DEBRID_STREAM_TYPE,
   HTTP_STREAM_TYPE,
@@ -874,12 +1157,46 @@ export const TYPES = [
   ANIME_TYPE,
 ] as const;
 
+export const TYPE_LABELS: Record<(typeof TYPES)[number], string> = {
+  [MOVIE_TYPE]: 'Movie',
+  [SERIES_TYPE]: 'Series',
+  [CHANNEL_TYPE]: 'Channel',
+  [TV_TYPE]: 'TV',
+  [ANIME_TYPE]: 'Anime',
+};
+
 const RESOURCES = [
   STREAM_RESOURCE,
   SUBTITLES_RESOURCE,
   CATALOG_RESOURCE,
   META_RESOURCE,
   ADDON_CATALOG_RESOURCE,
+] as const;
+
+export const RESOURCE_LABELS: Record<Resource, string> = {
+  [STREAM_RESOURCE]: 'Stream',
+  [SUBTITLES_RESOURCE]: 'Subtitles',
+  [CATALOG_RESOURCE]: 'Catalog',
+  [META_RESOURCE]: 'Metadata',
+  [ADDON_CATALOG_RESOURCE]: 'Addon Catalog',
+};
+
+// export const PRESET_CATEGORY_STREAMS = 'streams' as const;
+// econst PRESET_CATEGORY_SUBTITLES = 'subtitles' as const;
+// const PRESET_CATEGORY_META_CATALOGS = 'meta_catalogs' as const;
+// const PRESET_CATEGORY_MISC = 'misc' as const;
+export enum PresetCategory {
+  STREAMS = 'streams',
+  SUBTITLES = 'subtitles',
+  META_CATALOGS = 'meta_catalogs',
+  MISC = 'misc',
+}
+
+export const PRESET_CATEGORIES = [
+  PresetCategory.STREAMS,
+  PresetCategory.SUBTITLES,
+  PresetCategory.META_CATALOGS,
+  PresetCategory.MISC,
 ] as const;
 
 const LANGUAGES = [
@@ -977,6 +1294,7 @@ export {
   AUDIO_TAGS,
   AUDIO_CHANNELS,
   ENCODES,
+  PASSTHROUGH_STAGES,
   SORT_CRITERIA,
   SORT_DIRECTIONS,
   STREAM_TYPES,
@@ -998,7 +1316,11 @@ export {
   PIKPAK_SERVICE,
   OFFCLOUD_SERVICE,
   SEEDR_SERVICE,
+  NZBDAV_SERVICE,
+  ALTMOUNT_SERVICE,
+  STREMIO_NNTP_SERVICE,
   EASYNEWS_SERVICE,
   SERVICE_DETAILS,
+  TOP_LEVEL_OPTION_DETAILS,
   HEADERS_FOR_IP_FORWARDING,
 };

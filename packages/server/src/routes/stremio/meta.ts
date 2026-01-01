@@ -1,9 +1,12 @@
-import { Router, Request, Response } from 'express';
-import { AIOStreams, constants, MetaResponse } from '@aiostreams/core';
-import { createLogger } from '@aiostreams/core';
-import { createResponse } from '../../utils/responses';
-import { StremioTransformer } from '@aiostreams/core';
-import { stremioMetaRateLimiter } from '../../middlewares/ratelimit';
+import { Router, Request, Response, NextFunction } from 'express';
+import {
+  AIOStreams,
+  MetaResponse,
+  createLogger,
+  StremioTransformer,
+} from '@aiostreams/core';
+
+import { stremioMetaRateLimiter } from '../../middlewares/ratelimit.js';
 
 const logger = createLogger('server');
 const router: Router = Router();
@@ -12,7 +15,7 @@ router.use(stremioMetaRateLimiter);
 
 router.get(
   '/:type/:id.json',
-  async (req: Request, res: Response<MetaResponse>, next) => {
+  async (req: Request, res: Response<MetaResponse>, next: NextFunction) => {
     if (!req.userData) {
       res.status(200).json({
         meta: StremioTransformer.createErrorMeta({
@@ -43,7 +46,9 @@ router.get(
       await aiostreams.initialise();
 
       const meta = await aiostreams.getMeta(type, id);
-      const transformed = await transformer.transformMeta(meta);
+      const transformed = await transformer.transformMeta(meta, {
+        provideStreamData: true,
+      });
       if (!transformed) {
         next();
       } else {

@@ -1,12 +1,14 @@
 'use client';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { MergedCatalog, CatalogModification } from '@aiostreams/core';
 import { PageWrapper } from '../shared/page-wrapper';
 import { useStatus } from '@/context/status';
 import { useUserData } from '@/context/userData';
 import { SettingsCard } from '../shared/settings-card';
-import { Button, IconButton } from '../ui/button';
+import { Button, CloseButton, IconButton } from '../ui/button';
 import { Modal } from '../ui/modal';
 import { Switch } from '../ui/switch';
+import { Card } from '../ui/card';
 import {
   DndContext,
   useSensor,
@@ -26,6 +28,8 @@ import { PlusIcon, SearchIcon, FilterIcon } from 'lucide-react';
 import TemplateOption from '../shared/template-option';
 import * as constants from '../../../../core/src/utils/constants';
 import { TextInput } from '../ui/text-input';
+import { MdSubtitles, MdOutlineDataset, MdSavedSearch } from 'react-icons/md';
+import { RiFolderDownloadFill } from 'react-icons/ri';
 
 import { Popover } from '../ui/popover';
 import { BiEdit, BiTrash } from 'react-icons/bi';
@@ -42,6 +46,7 @@ import {
   LuSettings,
   LuExternalLink,
   LuCircleCheck,
+  LuMerge,
 } from 'react-icons/lu';
 import {
   TbSearch,
@@ -76,23 +81,6 @@ import { useDisclosure } from '@/hooks/disclosure';
 import { useMode } from '@/context/mode';
 import { Select } from '../ui/select';
 
-interface CatalogModification {
-  id: string;
-  type: string;
-  name?: string;
-  overrideType?: string;
-  enabled?: boolean;
-  shuffle?: boolean;
-  reverse?: boolean;
-  persistShuffleFor?: number;
-  rpdb?: boolean;
-  onlyOnDiscover?: boolean;
-  hideable?: boolean;
-  searchable?: boolean;
-  addonName?: string;
-  disableSearch?: boolean;
-}
-
 export function AddonsMenu() {
   return (
     <PageWrapper className="space-y-4 p-4 sm:p-8">
@@ -110,11 +98,11 @@ function Content() {
   const [page, setPage] = useState<'installed' | 'marketplace'>('installed');
   const [search, setSearch] = useState('');
   // Filter states
-  const [serviceFilters, setServiceFilters] = useState<string[]>([]);
-  const [streamTypeFilters, setStreamTypeFilters] = useState<
-    constants.StreamType[]
-  >([]);
-  const [resourceFilters, setResourceFilters] = useState<string[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState<
+    constants.PresetCategory | 'all'
+  >('all');
+  const [serviceFilter, setServiceFilter] = useState<string>('all');
+  const [streamTypeFilter, setStreamTypeFilter] = useState<string>('all');
   // Modal states
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
@@ -127,33 +115,35 @@ function Content() {
   // Filtering and search for marketplace
   const filteredPresets = useMemo(() => {
     if (!status?.settings?.presets) return [];
-    return status.settings.presets.filter((preset) => {
-      if (preset.ID === 'custom') return true;
-      const matchesService =
-        serviceFilters.length === 0 ||
-        (preset.SUPPORTED_SERVICES &&
-          serviceFilters.every((s) => preset.SUPPORTED_SERVICES.includes(s)));
-      const matchesStreamType =
-        streamTypeFilters.length === 0 ||
-        (preset.SUPPORTED_STREAM_TYPES &&
-          streamTypeFilters.every((t) =>
-            preset.SUPPORTED_STREAM_TYPES.includes(t)
-          ));
-      const matchesResource =
-        resourceFilters.length === 0 ||
-        (preset.SUPPORTED_RESOURCES &&
-          resourceFilters.every((r) =>
-            preset.SUPPORTED_RESOURCES.includes(r as Resource)
-          ));
-      const matchesSearch =
-        !search ||
-        preset.NAME.toLowerCase().includes(search.toLowerCase()) ||
-        preset.DESCRIPTION.toLowerCase().includes(search.toLowerCase());
-      return (
-        matchesService && matchesStreamType && matchesResource && matchesSearch
+    let filtered = [...status.settings.presets];
+    if (categoryFilter !== 'all') {
+      filtered = filtered.filter(
+        (n) =>
+          (n.CATEGORY || constants.PresetCategory.STREAMS) === categoryFilter
       );
-    });
-  }, [status, search, serviceFilters, streamTypeFilters, resourceFilters]);
+    }
+    if (serviceFilter !== 'all') {
+      filtered = filtered.filter(
+        (n) =>
+          n.SUPPORTED_SERVICES && n.SUPPORTED_SERVICES.includes(serviceFilter)
+      );
+    }
+    if (streamTypeFilter !== 'all') {
+      filtered = filtered.filter(
+        (n) =>
+          n.SUPPORTED_STREAM_TYPES &&
+          n.SUPPORTED_STREAM_TYPES.includes(streamTypeFilter as any)
+      );
+    }
+    if (search) {
+      filtered = filtered.filter(
+        (n) =>
+          n.NAME.toLowerCase().includes(search.toLowerCase()) ||
+          n.DESCRIPTION.toLowerCase().includes(search.toLowerCase())
+      );
+    }
+    return filtered;
+  }, [status, search, categoryFilter, serviceFilter, streamTypeFilter]);
 
   // My Addons (user's enabled/added presets)
 
@@ -247,19 +237,30 @@ function Content() {
     setIsDragging(true);
   }
 
-  // Service, stream type, and resource options
+  // Service, stream type options
   const serviceOptions = Object.values(constants.SERVICE_DETAILS).map(
     (service) => ({ label: service.name, value: service.id })
   );
+  const typeLabelMap: Record<string, string> = {
+    p2p: 'P2P',
+    http: 'HTTP',
+    usenet: 'Usenet',
+    debrid: 'Debrid',
+    live: 'Live',
+  };
   const streamTypeOptions = (constants.STREAM_TYPES || [])
-    .filter((type) => type !== 'error')
-    .map((type: string) => ({ label: type, value: type }));
-  const resourceOptions = (constants.RESOURCES || []).map((res: string) => ({
-    label: res,
-    value: res,
-  }));
-  const activeFilterCount =
-    serviceFilters.length + streamTypeFilters.length + resourceFilters.length;
+    .filter(
+      (type) =>
+        ![
+          'error',
+          'statistic',
+          'external',
+          'youtube',
+          'stremio-usenet',
+          'archive',
+        ].includes(type)
+    )
+    .map((type: string) => ({ label: typeLabelMap[type], value: type }));
 
   // DND-kit setup
   const sensors = useSensors(
@@ -298,6 +299,24 @@ function Content() {
       document.removeEventListener('touchend', handleDragEnd);
     };
   }, [isDragging]);
+
+  // Group presets by category
+  const streamPresets = filteredPresets.filter(
+    (n) => n.CATEGORY === constants.PresetCategory.STREAMS || !n.CATEGORY
+  );
+  const subtitlePresets = filteredPresets.filter(
+    (n) => n.CATEGORY === constants.PresetCategory.SUBTITLES
+  );
+  const metaCatalogPresets = filteredPresets.filter(
+    (n) => n.CATEGORY === constants.PresetCategory.META_CATALOGS
+  );
+  const miscPresets = filteredPresets.filter(
+    (n) => n.CATEGORY === constants.PresetCategory.MISC
+  );
+
+  const addonGridClassName =
+    'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 3xl:grid-cols-5 5xl:grid-cols-6 6xl:grid-cols-7 7xl:grid-cols-8 gap-4';
+
   return (
     <>
       {/* <div className="flex items-center w-full">
@@ -308,9 +327,9 @@ function Content() {
         <div className="flex flex-1"></div>
       </div> */}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <StaticTabs
-          className="h-10 w-fit border rounded-full"
+          className="h-10 w-fit max-w-full border rounded-full"
           triggerClass="px-4 py-1 text-md"
           items={[
             {
@@ -428,8 +447,10 @@ function Content() {
 
             {userData.presets.length > 0 && <CatalogSettingsCard />}
 
+            {userData.presets.length > 0 && <MergedCatalogsCard />}
+
             {userData.presets.length > 0 && mode === 'pro' && (
-              <AddonGroupCard />
+              <AddonFetchingBehaviorCard />
             )}
           </PageWrapper>
         )}
@@ -445,7 +466,7 @@ function Content() {
               },
             }}
             key="marketplace"
-            className="pt-0 space-y-8 relative z-[4]"
+            className="pt-0 space-y-6 relative z-[4]"
           >
             <div>
               <h2>Marketplace</h2>
@@ -453,68 +474,168 @@ function Content() {
                 Browse and install addons from the marketplace.
               </p>
             </div>
-            <div className="bg-[--card] border border-[--border] rounded-xl p-4 mb-6 shadow-sm">
-              <div className="flex justify-center mb-4">
-                <div className="w-full sm:w-[500px] flex gap-2">
-                  <TextInput
-                    value={search}
-                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                      setSearch(e.target.value)
-                    }
-                    placeholder="Search addons..."
-                    className="flex-1"
-                    leftIcon={<SearchIcon className="w-4 h-4" />}
-                  />
-                  <AddonFilterPopover
-                    serviceOptions={serviceOptions}
-                    streamTypeOptions={streamTypeOptions}
-                    resourceOptions={resourceOptions}
-                    serviceFilters={serviceFilters}
-                    setServiceFilters={setServiceFilters}
-                    streamTypeFilters={streamTypeFilters}
-                    setStreamTypeFilters={setStreamTypeFilters}
-                    resourceFilters={resourceFilters}
-                    setResourceFilters={setResourceFilters}
-                  >
-                    <IconButton
-                      icon={<FilterIcon className="w-5 h-5" />}
-                      intent={
-                        activeFilterCount > 0 ? 'primary' : 'primary-outline'
-                      }
-                      aria-label="Filters"
-                    />
-                  </AddonFilterPopover>
-                </div>
+
+            {/* Category tabs */}
+            <StaticTabs
+              className="h-10 w-fit max-w-full border rounded-full"
+              triggerClass="px-4 py-1 text-sm"
+              items={[
+                {
+                  name: 'All',
+                  isCurrent: categoryFilter === 'all',
+                  onClick: () => setCategoryFilter('all'),
+                },
+                {
+                  name: 'Streams',
+                  isCurrent:
+                    categoryFilter === constants.PresetCategory.STREAMS,
+                  onClick: () =>
+                    setCategoryFilter(constants.PresetCategory.STREAMS),
+                },
+                {
+                  name: 'Subtitles',
+                  isCurrent:
+                    categoryFilter === constants.PresetCategory.SUBTITLES,
+                  onClick: () =>
+                    setCategoryFilter(constants.PresetCategory.SUBTITLES),
+                },
+                {
+                  name: 'Metadata & Catalogs',
+                  isCurrent:
+                    categoryFilter === constants.PresetCategory.META_CATALOGS,
+                  onClick: () =>
+                    setCategoryFilter(constants.PresetCategory.META_CATALOGS),
+                },
+                {
+                  name: 'Miscellaneous',
+                  isCurrent: categoryFilter === constants.PresetCategory.MISC,
+                  onClick: () =>
+                    setCategoryFilter(constants.PresetCategory.MISC),
+                },
+              ]}
+            />
+
+            {/* Filters and search row */}
+            <div className="flex flex-col lg:flex-row gap-2">
+              <div className="flex gap-2 flex-1 lg:flex-none">
+                <Select
+                  value={serviceFilter}
+                  onValueChange={setServiceFilter}
+                  options={[
+                    { label: 'All Services', value: 'all' },
+                    ...serviceOptions,
+                  ]}
+                  fieldClass="lg:w-[200px]"
+                />
+                <Select
+                  value={streamTypeFilter}
+                  onValueChange={setStreamTypeFilter}
+                  options={[
+                    { label: 'All Types', value: 'all' },
+                    ...streamTypeOptions,
+                  ]}
+                  fieldClass="lg:w-[200px]"
+                />
               </div>
-              {/* Scrollable Addon Cards Grid */}
-              <div className="h-[calc(100vh-300px)] overflow-y-auto pr-1">
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {filteredPresets.map((preset: any) => {
-                    // Always allow adding, never show edit
-                    return (
-                      <AddonCard
-                        key={preset.ID}
-                        preset={preset}
-                        isAdded={false}
-                        onAdd={() => handleAddPreset(preset)}
-                      />
-                    );
-                  })}
-                </div>
-              </div>
+              <TextInput
+                value={search}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setSearch(e.target.value)
+                }
+                placeholder="Search addons..."
+                className="flex-1"
+                leftIcon={<SearchIcon className="w-4 h-4" />}
+              />
             </div>
+
+            {/* Addon cards by category */}
+            {filteredPresets.length === 0 && (
+              <Card className="p-8 text-center">
+                <p className="text-[--muted]">
+                  No addons found matching your criteria.
+                </p>
+              </Card>
+            )}
+
+            {!!streamPresets?.length && (
+              <Card className="p-4 space-y-6">
+                <h3 className="flex gap-3 items-center">
+                  <RiFolderDownloadFill /> Streams
+                </h3>
+                <div className={addonGridClassName}>
+                  {streamPresets.map((preset: any) => (
+                    <AddonCard
+                      key={preset.ID}
+                      preset={preset}
+                      onAdd={() => handleAddPreset(preset)}
+                    />
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {!!subtitlePresets?.length && (
+              <Card className="p-4 space-y-6">
+                <h3 className="flex gap-3 items-center">
+                  <MdSubtitles /> Subtitles
+                </h3>
+                <div className={addonGridClassName}>
+                  {subtitlePresets.map((preset: any) => (
+                    <AddonCard
+                      key={preset.ID}
+                      preset={preset}
+                      onAdd={() => handleAddPreset(preset)}
+                    />
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {!!metaCatalogPresets?.length && (
+              <Card className="p-4 space-y-6">
+                <h3 className="flex gap-3 items-center">
+                  <MdOutlineDataset /> Metadata & Catalogs
+                </h3>
+                <div className={addonGridClassName}>
+                  {metaCatalogPresets.map((preset: any) => (
+                    <AddonCard
+                      key={preset.ID}
+                      preset={preset}
+                      onAdd={() => handleAddPreset(preset)}
+                    />
+                  ))}
+                </div>
+              </Card>
+            )}
+
+            {!!miscPresets?.length && (
+              <Card className="p-4 space-y-6">
+                <h3 className="flex gap-3 items-center">
+                  <LuSettings /> Miscellaneous
+                </h3>
+                <div className={addonGridClassName}>
+                  {miscPresets.map((preset: any) => (
+                    <AddonCard
+                      key={preset.ID}
+                      preset={preset}
+                      onAdd={() => handleAddPreset(preset)}
+                    />
+                  ))}
+                </div>
+              </Card>
+            )}
           </PageWrapper>
         )}
-        {/* Add/Edit Addon Modal (ensure both tabs can use it)*/}
-        <AddonModal
-          open={modalOpen}
-          onOpenChange={setModalOpen}
-          mode={modalMode}
-          presetMetadata={modalPreset}
-          initialValues={modalInitialValues as any}
-          onSubmit={handleModalSubmit}
-        />
       </AnimatePresence>
+      {/* Add/Edit Addon Modal (ensure both tabs can use it)*/}
+      <AddonModal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        mode={modalMode}
+        presetMetadata={modalPreset}
+        initialValues={modalInitialValues as any}
+        onSubmit={handleModalSubmit}
+      />
     </>
   );
 }
@@ -701,15 +822,23 @@ function SortableAddonItem({
         />
         <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
           <div className="relative flex-shrink-0 h-8 w-8 hidden sm:block">
-            {!logo ? (
-              <IoExtensionPuzzle className="w-full h-full object-contain" />
-            ) : (
+            {logo ? (
               <Image
                 src={logo}
                 alt={presetMetadata.NAME}
                 fill
                 className="w-full h-full object-contain rounded-md"
               />
+            ) : presetMetadata.ID === 'custom' ? (
+              <PlusIcon className="w-full h-full object-contain text-[--brand]" />
+            ) : preset.options.name?.trim()?.[0] ? (
+              <div className="w-full h-full flex items-center justify-center rounded-md bg-gray-950">
+                <p className="text-lg font-bold">
+                  {preset.options.name?.trim()?.[0]?.toUpperCase() || '?'}
+                </p>
+              </div>
+            ) : (
+              <IoExtensionPuzzle className="w-full h-full object-contain text-[--brand]" />
             )}
           </div>
 
@@ -720,9 +849,9 @@ function SortableAddonItem({
 
         <div className="flex items-center gap-1 sm:gap-2">
           <Switch
-            value={!!preset.enabled}
+            value={preset.enabled ?? false}
             onValueChange={onToggleEnabled}
-            size="sm"
+            className="h-5 w-9 md:h-6 md:w-11"
           />
           {isConfigurable && (
             <IconButton
@@ -826,124 +955,165 @@ function SortableAddonItem({
 }
 
 // AddonCard component
-function AddonCard({
-  preset,
-  isAdded,
-  onAdd,
-}: {
-  preset: any;
-  isAdded: boolean;
-  onAdd: () => void;
-}) {
+function AddonCard({ preset, onAdd }: { preset: any; onAdd: () => void }) {
+  const [showBuiltinModal, setShowBuiltinModal] = useState(false);
+
   return (
-    <div className="flex flex-col min-h-72 h-auto bg-[--background] border border-[--border] rounded-lg shadow-sm p-4 relative overflow-hidden">
-      {/* Built-in ribbon */}
-      {preset.BUILTIN && (
-        <div className="absolute -left-[30px] top-[20px] bg-[rgb(var(--color-brand-500))] text-white text-xs font-semibold py-1 w-[120px] text-center transform -rotate-45 shadow-md">
-          Built-in
-        </div>
-      )}
-      {/* Top: Logo + Name/Description */}
-      <div className="flex gap-4 items-start">
-        {preset.ID === 'custom' ? (
-          <div className="w-28 h-28 min-w-[7rem] min-h-[7rem] flex items-center justify-center rounded-lg bg-gray-900 text-[--brand] text-4xl">
-            <PlusIcon className="w-12 h-12" />
-          </div>
-        ) : preset.LOGO ? (
-          <img
-            src={preset.LOGO}
-            alt={preset.NAME}
-            className="w-28 h-28 min-w-[7rem] min-h-[7rem] object-contain rounded-lg bg-gray-800"
-          />
-        ) : (
-          <div className="w-28 h-28 min-w-[7rem] min-h-[7rem] flex items-center justify-center rounded-lg bg-gray-900 text-[--brand] text-4xl">
-            <IoExtensionPuzzle className="w-15 h-15" />
+    <>
+      <div className="border border-[rgb(255_255_255_/_5%)] relative overflow-hidden bg-gray-900/70 rounded-xl p-3 flex flex-col h-full">
+        {/* Built-in ribbon - top-right */}
+        {preset.BUILTIN && (
+          <div
+            className="absolute -right-[30px] top-[20px] bg-[rgb(var(--color-brand-500))] text-white text-xs font-semibold py-1 w-[120px] text-center transform rotate-45 shadow-md z-[2] cursor-pointer hover:bg-[rgb(var(--color-brand-600))] transition-colors"
+            onClick={() => setShowBuiltinModal(true)}
+            title="Click to learn more about built-in addons"
+          >
+            Built-in
           </div>
         )}
-        <div className="flex flex-col min-w-0 flex-1">
-          <div className="font-bold text-lg mb-1 truncate">{preset.NAME}</div>
-          <div className="text-sm text-muted-foreground mb-2 line-clamp-3 whitespace-pre-line">
-            <MarkdownLite>{preset.DESCRIPTION}</MarkdownLite>
+
+        <div className="z-[1] relative flex flex-col flex-1 gap-3">
+          {/* Logo and Name */}
+          <div className="flex gap-3 pr-16">
+            {preset.ID === 'custom' ? (
+              <div className="relative rounded-md size-12 bg-gray-950 overflow-hidden flex items-center justify-center">
+                <PlusIcon className="w-6 h-6 text-[--brand]" />
+              </div>
+            ) : preset.LOGO ? (
+              <div className="relative rounded-md size-12 bg-gray-900 overflow-hidden">
+                <img
+                  src={preset.LOGO}
+                  alt={preset.NAME}
+                  className="w-full h-full object-cover"
+                />
+              </div>
+            ) : (
+              <div className="relative rounded-md size-12 bg-gray-950 overflow-hidden flex items-center justify-center">
+                <p className="text-2xl font-bold">
+                  {preset.NAME[0].toUpperCase()}
+                </p>
+              </div>
+            )}
+
+            <div>
+              <p className="font-semibold line-clamp-1">{preset.NAME}</p>
+              <p className="text-xs line-clamp-1 tracking-wide opacity-30">
+                {preset.ID}
+              </p>
+            </div>
           </div>
-        </div>
-      </div>
-      {/* Tags Section */}
-      <div className="flex flex-col gap-1 mt-2">
-        <div className="flex flex-wrap gap-1 items-center min-h-[1.5rem]">
-          {preset.SUPPORTED_SERVICES?.length > 0 && (
-            <span className="font-semibold text-xs text-[--muted] mr-1">
-              Services:
-            </span>
+
+          {/* Description */}
+          {preset.DESCRIPTION && (
+            <Popover
+              trigger={
+                <p className="text-sm text-[--muted] line-clamp-2 cursor-pointer">
+                  <MarkdownLite>{preset.DESCRIPTION}</MarkdownLite>
+                </p>
+              }
+            >
+              <p className="text-sm">
+                <MarkdownLite>{preset.DESCRIPTION}</MarkdownLite>
+              </p>
+            </Popover>
           )}
-          {preset.SUPPORTED_SERVICES?.map((sid: string) => {
-            const service =
-              constants.SERVICE_DETAILS[
-                sid as keyof typeof constants.SERVICE_DETAILS
-              ];
-            return (
-              <Tooltip
-                key={sid}
-                side="top"
-                trigger={
-                  <span className="bg-gray-800 text-xs px-2 py-0.5 rounded text-[--brand] font-mono">
-                    {service?.shortName || sid}
-                  </span>
-                }
-              >
-                <span className="bg-gray-800 text-xs px-2 py-0.5 rounded text-[--brand] font-mono">
+
+          <div className="flex flex-wrap gap-1.5">
+            {preset.SUPPORTED_SERVICES?.map((sid: string) => {
+              const service =
+                constants.SERVICE_DETAILS[
+                  sid as keyof typeof constants.SERVICE_DETAILS
+                ];
+              return (
+                <Tooltip
+                  key={sid}
+                  side="top"
+                  trigger={
+                    <span className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-[--brand]/10 text-[--brand] border border-[--brand]/20">
+                      {service?.shortName || sid}
+                    </span>
+                  }
+                >
                   {service?.name || sid}
-                </span>
-              </Tooltip>
-            );
-          })}
-        </div>
-        <div className="flex flex-wrap gap-1 items-center min-h-[1.5rem]">
-          {preset.SUPPORTED_RESOURCES?.length > 0 && (
-            <span className="font-semibold text-xs text-[--muted] mr-1">
-              Resources:
-            </span>
+                </Tooltip>
+              );
+            })}
+            {preset.SUPPORTED_RESOURCES?.map((res: string) => (
+              <span
+                key={res}
+                className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20"
+              >
+                {res}
+              </span>
+            ))}
+            {preset.SUPPORTED_STREAM_TYPES?.map((type: string) => (
+              <span
+                key={type}
+                className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-green-500/10 text-green-400 border border-green-500/20"
+              >
+                {type}
+              </span>
+            ))}
+          </div>
+
+          {/* Spacer to push button to bottom */}
+          <div className="flex-1"></div>
+
+          {preset.DISABLED ? (
+            <div className="mt-auto">
+              <Alert
+                intent="alert"
+                className="w-full overflow-x-auto whitespace-nowrap"
+                description={
+                  <MarkdownLite>{preset.DISABLED.reason}</MarkdownLite>
+                }
+              />
+            </div>
+          ) : (
+            <div className="mt-auto">
+              <Button
+                size="md"
+                className="w-full"
+                intent="primary-subtle"
+                onClick={onAdd}
+              >
+                Configure
+              </Button>
+            </div>
           )}
-          {preset.SUPPORTED_RESOURCES?.map((res: string) => (
-            <span
-              key={res}
-              className="bg-gray-800 text-xs px-2 py-0.5 rounded text-blue-400 font-mono"
-            >
-              {res}
-            </span>
-          ))}
-        </div>
-        <div className="flex flex-wrap gap-1 items-center min-h-[1.5rem]">
-          {preset.SUPPORTED_STREAM_TYPES?.length > 0 && (
-            <span className="font-semibold text-xs text-[--muted] mr-1">
-              Stream Types:
-            </span>
-          )}
-          {preset.SUPPORTED_STREAM_TYPES?.map((type: string) => (
-            <span
-              key={type}
-              className="bg-gray-800 text-xs px-2 py-0.5 rounded text-green-400 font-mono"
-            >
-              {type}
-            </span>
-          ))}
         </div>
       </div>
-      {preset.DISABLED ? (
-        <div className="mt-auto pt-3 flex items-end">
-          <Alert
-            intent="alert"
-            className="w-full overflow-x-auto whitespace-nowrap"
-            description={<MarkdownLite>{preset.DISABLED.reason}</MarkdownLite>}
-          />
+
+      <Modal
+        open={showBuiltinModal}
+        onOpenChange={setShowBuiltinModal}
+        title="What are Built-in Addons?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm leading-relaxed">
+            Built-in addons are addons whose code lives directly inside
+            AIOStreams. You still install and configure them from the
+            marketplace just like any other addon (such as Comet or Torrentio),
+            but they run locally on this AIOStreams instance.
+          </p>
+          <div className="bg-[--subtle] rounded-lg p-3 space-y-2">
+            <p className="text-sm font-medium">Why does this matter?</p>
+            <ul className="text-sm text-[--muted] space-y-1.5 list-disc list-inside">
+              <li>Not affected by rate limits from other addon servers</li>
+              <li>Faster response times since there's no network delay</li>
+              <li>
+                Exclusive to AIOStreams and can't be installed directly to
+                Stremio
+              </li>
+            </ul>
+          </div>
+          <p className="text-xs text-[--muted] italic">
+            Think of it like having the addon server built into AIOStreams
+            itself!
+          </p>
         </div>
-      ) : (
-        <div className="mt-auto pt-3 flex items-end">
-          <Button size="md" className="w-full" onClick={onAdd}>
-            Configure
-          </Button>
-        </div>
-      )}
-    </div>
+      </Modal>
+    </>
   );
 }
 
@@ -978,7 +1148,7 @@ function AddonModal({
   let dynamicOptions: Option[] = presetMetadata?.OPTIONS || [];
   if (configMode === 'noob') {
     dynamicOptions = dynamicOptions.filter((opt: any) => {
-      if (opt?.showInNoobMode === false) return false;
+      if (opt?.showInSimpleMode === false) return false;
       return true;
     });
   }
@@ -1082,112 +1252,13 @@ function AddonModal({
   );
 }
 
-function AddonFilterPopover({
-  serviceOptions,
-  streamTypeOptions,
-  resourceOptions,
-  serviceFilters,
-  setServiceFilters,
-  streamTypeFilters,
-  setStreamTypeFilters,
-  resourceFilters,
-  setResourceFilters,
-  children,
-}: any) {
-  const [open, setOpen] = useState(false);
-  return (
-    <Popover
-      open={open}
-      onOpenChange={setOpen}
-      trigger={children}
-      modal={false}
-      className="p-4 max-w-full w-full"
-    >
-      <div className="flex flex-col gap-3">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-          <div className="flex flex-col max-h-60 overflow-y-auto">
-            <div className="mb-2 font-semibold text-sm text-muted-foreground">
-              Services
-            </div>
-            {serviceOptions.map((opt: any) => (
-              <div
-                key={opt.value}
-                className="flex items-center gap-2 mb-2 last:mb-0"
-              >
-                <Switch
-                  value={serviceFilters.includes(opt.value)}
-                  onValueChange={(checked: boolean) => {
-                    setServiceFilters((prev: string[]) =>
-                      checked
-                        ? [...prev, opt.value]
-                        : prev.filter((v) => v !== opt.value)
-                    );
-                  }}
-                  size="sm"
-                />
-                <span className="text-xs">{opt.label}</span>
-              </div>
-            ))}
-          </div>
-          <div className="flex flex-col max-h-60 overflow-y-auto">
-            <div className="mb-2 font-semibold text-sm text-muted-foreground">
-              Stream Types
-            </div>
-            {streamTypeOptions.map((opt: any) => (
-              <div
-                key={opt.value}
-                className="flex items-center gap-2 mb-2 last:mb-0"
-              >
-                <Switch
-                  value={streamTypeFilters.includes(opt.value)}
-                  onValueChange={(checked: boolean) => {
-                    setStreamTypeFilters((prev: string[]) =>
-                      checked
-                        ? [...prev, opt.value]
-                        : prev.filter((v) => v !== opt.value)
-                    );
-                  }}
-                  size="sm"
-                />
-                <span className="text-xs">{opt.label}</span>
-              </div>
-            ))}
-          </div>
-          <div className="flex flex-col max-h-60 overflow-y-auto">
-            <div className="mb-2 font-semibold text-sm text-muted-foreground">
-              Resources
-            </div>
-            {resourceOptions.map((opt: any) => (
-              <div
-                key={opt.value}
-                className="flex items-center gap-2 mb-2 last:mb-0"
-              >
-                <Switch
-                  value={resourceFilters.includes(opt.value)}
-                  onValueChange={(checked: boolean) => {
-                    setResourceFilters((prev: string[]) =>
-                      checked
-                        ? [...prev, opt.value]
-                        : prev.filter((v) => v !== opt.value)
-                    );
-                  }}
-                  size="sm"
-                />
-                <span className="text-xs">{opt.label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <Button className="w-full mt-2" onClick={() => setOpen(false)}>
-          Done
-        </Button>
-      </div>
-    </Popover>
-  );
-}
-
-function AddonGroupCard() {
+function AddonFetchingBehaviorCard() {
   const { userData, setUserData } = useUserData();
+  const [mode, setMode] = useState(() => {
+    if (userData.dynamicAddonFetching?.enabled) return 'dynamic';
+    if (userData.groups?.enabled) return 'groups';
+    return 'default';
+  });
 
   // Helper function to get presets that are not in any group except the current one
   const getAvailablePresets = (currentGroupIndex: number) => {
@@ -1213,23 +1284,15 @@ function AddonGroupCard() {
     updates: Partial<{ addons: string[]; condition: string }>
   ) => {
     setUserData((prev) => {
-      // Initialize groups array if it doesn't exist
       const currentGroups = prev.groups?.groupings || [];
-
-      // Create a new array with all existing groups
       const newGroups = [...currentGroups];
-
-      // Update the specific group with new values, preserving other fields
       newGroups[index] = {
         ...newGroups[index],
         ...updates,
       };
-
       if (index === 0) {
-        // set condition for first group to true
         newGroups[index].condition = 'true';
       }
-
       return {
         ...prev,
         groups: {
@@ -1240,131 +1303,213 @@ function AddonGroupCard() {
     });
   };
 
+  const handleModeChange = (newMode: string) => {
+    setMode(newMode);
+    setUserData((prev) => ({
+      ...prev,
+      groups: {
+        ...prev.groups,
+        enabled: newMode === 'groups',
+      },
+      dynamicAddonFetching: {
+        ...prev.dynamicAddonFetching,
+        enabled: newMode === 'dynamic',
+      },
+    }));
+  };
+
+  const descriptions = {
+    default:
+      'Fetch from all addons simultaneously and wait for all addons to finish fetching before returning results.',
+    groups:
+      'Organise addons into groups with conditions. Each group can be evaluated based on results from previous groups. Read the [Wiki](https://github.com/Viren070/AIOStreams/wiki/Groups) for more information.',
+    dynamic:
+      'All addons start fetching at the same time. As soon as any addon returns results, the exit condition is evaluated. If the condition is met, results are returned immediately and any remaining addon results are ignored.',
+  };
+
+  const placeholderExitConditions = [
+    'count(resolution(totalStreams, "2160p")) > 0 or totalTimeTaken > 5000',
+    "queryType == 'anime' ? (count(resolution(totalStreams, '1080p')) > 0 or totalTimeTaken > 5000) : false",
+    "'addon' in queriedAddons and (totalTimeTaken >= 6000 or count(totalStreams) >= 5)",
+    "count(seeders(size(totalStreams, '5GB', '20GB'), 50)) > 0",
+    "queryType == 'movie' ? count(cached(resolution(totalStreams, '2160p'))) > 0 : count(resolution(totalStreams, '1080p')) >= 2",
+    "count(cached(quality(totalStreams, 'Bluray REMUX', 'Bluray', 'WEB-DL'))) > 0",
+  ];
+
   return (
     <SettingsCard
-      title="Groups"
-      //       description="Optionally assign your addons to groups. Streams are only fetched from your first group initially,
-      // and only if a certain condition is met, will streams be fetched from the next group, and so on. Leaving this blank will mean streams are
-      // fetched from all addons. For a guide and a reference to the group system,"
+      title="Addon Fetching Strategy"
+      description="Choose how streams are fetched from your addons"
     >
-      <div className="text-sm text-[--muted] mb-2">
-        Optionally assign your addons to groups. Streams are only fetched from
-        your first group initially, and only if a certain condition is met, will
-        streams be fetched from the next group, and so on. Leaving this blank
-        will mean streams are fetched from all addons. Check the{' '}
-        <a
-          href="https://github.com/Viren070/AIOStreams/wiki/Groups"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[--brand] hover:text-[--brand]/80 hover:underline"
-        >
-          wiki
-        </a>{' '}
-        for a detailed guide to using groups.
-      </div>
-      <Switch
-        label="Enable"
-        value={userData.groups?.enabled ?? false}
-        onValueChange={(value) => {
-          setUserData((prev) => ({
-            ...prev,
-            groups: { ...prev.groups, enabled: value },
-          }));
-        }}
-        side="right"
-      />
       <Select
-        label="Behaviour"
-        value={userData.groups?.behaviour ?? 'parallel'}
-        onValueChange={(value) => {
-          setUserData((prev) => ({
-            ...prev,
-            groups: {
-              ...prev.groups,
-              behaviour: value as 'sequential' | 'parallel',
-            },
-          }));
-        }}
+        label="Strategy"
+        value={mode}
+        onValueChange={handleModeChange}
         options={[
-          { label: 'Parallel', value: 'parallel' },
-          { label: 'Sequential', value: 'sequential' },
+          { label: 'Default', value: 'default' },
+          { label: 'Dynamic', value: 'dynamic' },
+          { label: 'Groups', value: 'groups' },
         ]}
-        disabled={userData.groups?.enabled === false}
-        help={
-          userData.groups?.behaviour === 'sequential'
-            ? 'Streams are fetched from the first group only to begin with. If the condition for the next group is met, streams are fetched from the next group, and so on.'
-            : 'Streams are fetched from all groups at the same time. When a condition is not met, results from its group onwards are simply not shown.'
-        }
       />
-      {(userData.groups?.groupings || []).map((group, index) => (
-        <div key={index} className="flex gap-2">
-          <div className="flex-1 flex gap-2">
-            <div className="flex-1">
-              <Combobox
-                multiple
-                disabled={userData.groups?.enabled === false}
-                value={group.addons}
-                options={getAvailablePresets(index)}
-                emptyMessage="You haven't installed any addons yet or they are already in a group"
-                label="Addons"
-                placeholder="Select addons"
-                onValueChange={(value) => {
-                  updateGroup(index, { addons: value });
-                }}
-              />
-            </div>
-            <div className="flex-1">
-              <TextInput
-                value={index === 0 ? 'true' : group.condition}
-                disabled={index === 0 || userData.groups?.enabled === false}
-                label="Condition"
-                placeholder="Enter condition"
-                onValueChange={(value) => {
-                  updateGroup(index, { condition: value });
-                }}
-              />
-            </div>
-          </div>
-          <IconButton
-            size="sm"
-            rounded
-            disabled={userData.groups?.enabled === false}
-            icon={<FaRegTrashAlt />}
-            intent="alert-subtle"
-            onClick={() => {
-              setUserData((prev) => {
-                const newGroups = [...(prev.groups?.groupings || [])];
-                newGroups.splice(index, 1);
-                return {
-                  ...prev,
-                  groups: { ...prev.groups, groupings: newGroups },
-                };
-              });
-            }}
-          />
-        </div>
-      ))}
-      <div className="mt-2 flex gap-2 items-center">
-        <IconButton
-          rounded
-          size="sm"
-          intent="primary-subtle"
-          icon={<FaPlus />}
-          disabled={userData.groups?.enabled === false}
-          onClick={() => {
-            setUserData((prev) => {
-              const currentGroups = prev.groups?.groupings || [];
-              return {
+
+      <div className="text-sm text-[--muted] mt-2 mb-4">
+        {descriptions[mode as keyof typeof descriptions]}
+      </div>
+
+      {mode === 'groups' && (
+        <>
+          <Select
+            label="Group Behaviour"
+            value={userData.groups?.behaviour ?? 'parallel'}
+            onValueChange={(value) => {
+              setUserData((prev) => ({
                 ...prev,
                 groups: {
                   ...prev.groups,
-                  groupings: [...currentGroups, { addons: [], condition: '' }],
+                  behaviour: value as 'sequential' | 'parallel',
                 },
-              };
-            });
+              }));
+            }}
+            options={[
+              { label: 'Parallel', value: 'parallel' },
+              { label: 'Sequential', value: 'sequential' },
+            ]}
+            help={
+              userData.groups?.behaviour === 'sequential'
+                ? 'Sequential: Start with group 1. Only fetch from group 2 if its condition evaluates to true based on group 1\'s results (e.g., "count(totalStreams) < 4"). Continue this pattern for subsequent groups.'
+                : "Parallel: Begin fetching from all groups simultaneously. When group 1's results arrive, evaluate group 2's condition. If true, wait for group 2's results; if false, return results without waiting."
+            }
+          />
+
+          {(userData.groups?.groupings || []).map((group, index) => (
+            <div key={index} className="flex gap-2">
+              <div className="flex-1 flex gap-2">
+                <div className="flex-1">
+                  <Combobox
+                    multiple
+                    value={group.addons}
+                    options={getAvailablePresets(index)}
+                    emptyMessage="You haven't installed any addons yet or they are already in a group"
+                    label="Addons"
+                    placeholder="Select addons"
+                    onValueChange={(value) => {
+                      updateGroup(index, { addons: value });
+                    }}
+                  />
+                </div>
+                <div className="flex-1">
+                  <TextInput
+                    value={index === 0 ? 'true' : group.condition}
+                    disabled={index === 0}
+                    label="Condition"
+                    placeholder="Enter condition"
+                    onValueChange={(value) => {
+                      updateGroup(index, { condition: value });
+                    }}
+                  />
+                </div>
+              </div>
+              <IconButton
+                size="sm"
+                rounded
+                icon={<FaRegTrashAlt />}
+                intent="alert-subtle"
+                onClick={() => {
+                  setUserData((prev) => {
+                    const newGroups = [...(prev.groups?.groupings || [])];
+                    newGroups.splice(index, 1);
+                    return {
+                      ...prev,
+                      groups: { ...prev.groups, groupings: newGroups },
+                    };
+                  });
+                }}
+              />
+            </div>
+          ))}
+
+          <div className="mt-2 flex gap-2 items-center">
+            <IconButton
+              rounded
+              size="sm"
+              intent="primary-subtle"
+              icon={<FaPlus />}
+              onClick={() => {
+                setUserData((prev) => {
+                  const currentGroups = prev.groups?.groupings || [];
+                  return {
+                    ...prev,
+                    groups: {
+                      ...prev.groups,
+                      groupings: [
+                        ...currentGroups,
+                        { addons: [], condition: '' },
+                      ],
+                    },
+                  };
+                });
+              }}
+            />
+          </div>
+        </>
+      )}
+
+      {mode === 'dynamic' && (
+        <TextInput
+          label="Exit Condition"
+          placeholder={
+            placeholderExitConditions[
+              Math.floor(Math.random() * placeholderExitConditions.length)
+            ]
+          }
+          value={userData.dynamicAddonFetching?.condition ?? ''}
+          onValueChange={(value) => {
+            setUserData((prev) => ({
+              ...prev,
+              dynamicAddonFetching: {
+                ...prev.dynamicAddonFetching,
+                condition: value,
+              },
+            }));
           }}
+          help={
+            <p>
+              Write the condition using{' '}
+              <a
+                href="https://github.com/Viren070/AIOStreams/wiki/Stream-Expression-Language"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[--brand] hover:underline"
+              >
+                Stream Expression Language (SEL)
+              </a>
+              . The following variables are available:
+              <ul className="list-disc list-inside space-y-1 ml-2 mt-2">
+                <li>
+                  <code>totalStreams</code>: The total number of streams
+                </li>
+                <li>
+                  <code>totalTimeTaken</code>: The total time taken to fetch the
+                  streams
+                </li>
+                <li>
+                  <code>queryType</code>: The type of query e.g. 'movie',
+                  'series', or 'anime'
+                </li>
+                <li>
+                  <code>queriedAddons</code>: The addons that have been queried.
+                  Tip: use the <code>in</code> operator to check if a specific
+                  addon has been queried.
+                </li>
+                <li>
+                  <code>allAddons</code>: All addons that were intended to be
+                  used for that query.
+                </li>
+              </ul>
+            </p>
+          }
         />
-      </div>
+      )}
     </SettingsCard>
   );
 }
@@ -1386,6 +1531,10 @@ function CatalogSettingsCard() {
 
           // first we need to handle existing modifications, to ensure that they keep their order
           const modifications = existingMods.map((eMod) => {
+            // Skip merged catalogs - they don't come from the API
+            if (eMod.id.startsWith('aiostreams.merged.')) {
+              return eMod;
+            }
             const nMod = response.data!.find(
               (c) => c.id === eMod.id && c.type === eMod.type
             );
@@ -1420,6 +1569,7 @@ function CatalogSettingsCard() {
           });
 
           // Filter out modifications for catalogs that no longer exist
+          // BUT keep merged catalogs (they're managed separately)
           const newCatalogIds = new Set(
             response.data!.map((c) => `${c.id}-${c.type}`)
           );
@@ -1450,10 +1600,40 @@ function CatalogSettingsCard() {
     fetchCatalogs(true);
   }, []); // Empty dependency array means this runs once when component mounts
 
+  // Track merged catalogs count to trigger refresh when a merged catalog is added/removed
+  const mergedCatalogsCountRef = useRef(userData.mergedCatalogs?.length ?? 0);
+  useEffect(() => {
+    const currentCount = userData.mergedCatalogs?.length ?? 0;
+    if (currentCount !== mergedCatalogsCountRef.current) {
+      mergedCatalogsCountRef.current = currentCount;
+      // Trigger refresh when merged catalog count changes (added or deleted)
+      fetchCatalogs(true);
+    }
+  }, [userData.mergedCatalogs?.length, fetchCatalogs]);
+
   const capitalise = (str: string | undefined) => {
     if (!str) return '';
     return str.charAt(0).toUpperCase() + str.slice(1);
   };
+
+  // Build set of source catalog IDs that are part of enabled merged catalogs
+  const sourceCatalogsInMergedCatalogs = useMemo(() => {
+    const set = new Set<string>();
+    const enabledMerged = (userData.mergedCatalogs || []).filter(
+      (mc) => mc.enabled !== false
+    );
+    for (const mc of enabledMerged) {
+      for (const encodedId of mc.catalogIds) {
+        const params = new URLSearchParams(encodedId);
+        const id = params.get('id');
+        const type = params.get('type');
+        if (id && type) {
+          set.add(`${id}-${type}`);
+        }
+      }
+    }
+    return set;
+  }, [userData.mergedCatalogs]);
 
   // DND handlers
   const sensors = useSensors(
@@ -1567,30 +1747,710 @@ function CatalogSettingsCard() {
               strategy={verticalListSortingStrategy}
             >
               <ul className="space-y-2">
-                {(userData.catalogModifications || []).map(
-                  (catalog: CatalogModification) => (
+                {(userData.catalogModifications || [])
+                  .filter(
+                    (catalog) =>
+                      !sourceCatalogsInMergedCatalogs.has(
+                        `${catalog.id}-${catalog.type}`
+                      )
+                  )
+                  .map((catalog: CatalogModification) => (
                     <SortableCatalogItem
                       key={`${catalog.id}-${catalog.type}`}
                       catalog={catalog}
                       onToggleEnabled={(enabled) => {
-                        setUserData((prev) => ({
-                          ...prev,
-                          catalogModifications: prev.catalogModifications?.map(
-                            (c) =>
-                              c.id === catalog.id && c.type === catalog.type
-                                ? { ...c, enabled }
-                                : c
-                          ),
-                        }));
+                        setUserData((prev) => {
+                          const newState: Partial<typeof prev> = {
+                            catalogModifications:
+                              prev.catalogModifications?.map((c) =>
+                                c.id === catalog.id && c.type === catalog.type
+                                  ? { ...c, enabled }
+                                  : c
+                              ),
+                          };
+                          // If this is a merged catalog, also update mergedCatalogs state
+                          if (catalog.id.startsWith('aiostreams.merged.')) {
+                            newState.mergedCatalogs = prev.mergedCatalogs?.map(
+                              (mc) =>
+                                mc.id === catalog.id ? { ...mc, enabled } : mc
+                            );
+                          }
+                          return { ...prev, ...newState };
+                        });
                       }}
                       capitalise={capitalise}
                     />
-                  )
-                )}
+                  ))}
               </ul>
             </SortableContext>
           </DndContext>
         )}
+    </SettingsCard>
+  );
+}
+
+function MergedCatalogsCard() {
+  const { userData, setUserData } = useUserData();
+  const { status } = useStatus();
+  const maxMergedCatalogSources =
+    status?.settings?.limits?.maxMergedCatalogSources ?? 10;
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingMergedCatalog, setEditingMergedCatalog] =
+    useState<MergedCatalog | null>(null);
+  const [name, setName] = useState('');
+  const [type, setType] = useState('movie');
+  const [selectedCatalogs, setSelectedCatalogs] = useState<string[]>([]);
+  const [dedupeMethods, setDedupeMethods] = useState<('id' | 'title')[]>([
+    'id',
+  ]);
+  const [mergeMethod, setMergeMethod] =
+    useState<MergedCatalog['mergeMethod']>('sequential');
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [expandedAddons, setExpandedAddons] = useState<Set<string>>(new Set());
+  const [pendingDeleteMergedCatalogId, setPendingDeleteMergedCatalogId] =
+    useState<string | null>(null);
+
+  const confirmDeleteLastUnavailable = useConfirmationDialog({
+    title: 'Delete Merged Catalog',
+    description:
+      'This is the last catalog in this merged catalog. Removing it will delete the entire merged catalog. Are you sure?',
+    actionText: 'Delete Merged Catalog',
+    actionIntent: 'alert',
+    onConfirm: () => {
+      if (pendingDeleteMergedCatalogId) {
+        setUserData((prev) => ({
+          ...prev,
+          mergedCatalogs: prev.mergedCatalogs?.filter(
+            (mc) => mc.id !== pendingDeleteMergedCatalogId
+          ),
+          catalogModifications: prev.catalogModifications?.filter(
+            (mod) => mod.id !== pendingDeleteMergedCatalogId
+          ),
+        }));
+        setPendingDeleteMergedCatalogId(null);
+        toast.success('Merged catalog deleted');
+      }
+    },
+  });
+
+  const mergedCatalogs = userData.mergedCatalogs || [];
+
+  const capitalise = (str: string | undefined) => {
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1);
+  };
+
+  const allCatalogs = (userData.catalogModifications || [])
+    .filter((c) => !c.id.startsWith('aiostreams.merged.')) // Exclude merged catalogs from being selected as sources
+    .map((c) => ({
+      value: `id=${encodeURIComponent(c.id)}&type=${encodeURIComponent(c.type)}`,
+      name: c.name || c.id,
+      catalogType: c.type,
+      addonName: c.addonName || 'Unknown Addon',
+      isDisabled: c.enabled === false,
+    }));
+
+  const catalogsByAddon = allCatalogs.reduce(
+    (acc, catalog) => {
+      if (!acc[catalog.addonName]) {
+        acc[catalog.addonName] = [];
+      }
+      acc[catalog.addonName].push(catalog);
+      return acc;
+    },
+    {} as Record<string, typeof allCatalogs>
+  );
+
+  const filteredCatalogsByAddon = Object.entries(catalogsByAddon).reduce(
+    (acc, [addonName, catalogs]) => {
+      const filtered = catalogs.filter(
+        (c) =>
+          c.name.toLowerCase().includes(catalogSearch.toLowerCase()) ||
+          c.addonName.toLowerCase().includes(catalogSearch.toLowerCase()) ||
+          c.catalogType.toLowerCase().includes(catalogSearch.toLowerCase())
+      );
+      if (filtered.length > 0) {
+        // Sort by name, then by type
+        const sorted = [...filtered].sort((a, b) => {
+          const nameCompare = a.name.localeCompare(b.name);
+          if (nameCompare !== 0) return nameCompare;
+          return a.catalogType.localeCompare(b.catalogType);
+        });
+        acc[addonName] = sorted;
+      }
+      return acc;
+    },
+    {} as Record<string, typeof allCatalogs>
+  );
+
+  const toggleAddonExpanded = (addonName: string) => {
+    setExpandedAddons((prev) => {
+      const next = new Set(prev);
+      if (next.has(addonName)) {
+        next.delete(addonName);
+      } else {
+        next.add(addonName);
+      }
+      return next;
+    });
+  };
+
+  const toggleCatalog = (catalogValue: string) => {
+    setSelectedCatalogs((prev) => {
+      if (prev.includes(catalogValue)) {
+        return prev.filter((c) => c !== catalogValue);
+      }
+      // Prevent adding more than the limit
+      if (prev.length >= maxMergedCatalogSources) {
+        toast.error(
+          `Maximum ${maxMergedCatalogSources} source catalogs allowed`
+        );
+        return prev;
+      }
+      return [...prev, catalogValue];
+    });
+  };
+
+  const openAddModal = () => {
+    setEditingMergedCatalog(null);
+    setName('');
+    setType('movie');
+    setSelectedCatalogs([]);
+    setDedupeMethods(['id']);
+    setMergeMethod('sequential');
+    setCatalogSearch('');
+    setExpandedAddons(new Set());
+    setModalOpen(true);
+  };
+
+  const openEditModal = (mergedCatalog: MergedCatalog) => {
+    setEditingMergedCatalog(mergedCatalog);
+    setName(mergedCatalog.name);
+    setType(mergedCatalog.type);
+    setSelectedCatalogs(mergedCatalog.catalogIds);
+    setDedupeMethods(mergedCatalog.deduplicationMethods ?? ['id']);
+    setMergeMethod(mergedCatalog.mergeMethod ?? 'sequential');
+    setCatalogSearch('');
+    setExpandedAddons(new Set());
+    setModalOpen(true);
+  };
+
+  const handleSave = () => {
+    if (!name.trim()) {
+      toast.error('Name is required');
+      return;
+    }
+    if (!type.trim()) {
+      toast.error('Type is required');
+      return;
+    }
+    if (selectedCatalogs.length < 2) {
+      toast.error('Select at least 2 catalogs to merge');
+      return;
+    }
+    if (selectedCatalogs.length > maxMergedCatalogSources) {
+      toast.error(
+        `Maximum ${maxMergedCatalogSources} source catalogs allowed per merged catalog`
+      );
+      return;
+    }
+
+    if (editingMergedCatalog) {
+      setUserData((prev) => ({
+        ...prev,
+        catalogModifications: (prev.catalogModifications || []).map((mod) =>
+          mod.id === editingMergedCatalog.id &&
+          mod.type === editingMergedCatalog.type
+            ? {
+                ...mod,
+                name: name.trim(),
+                type: type.trim(),
+              }
+            : mod
+        ),
+        mergedCatalogs: (prev.mergedCatalogs || []).map((mc) =>
+          mc.id === editingMergedCatalog.id
+            ? {
+                ...mc,
+                name: name.trim(),
+                type: type.trim(),
+                catalogIds: selectedCatalogs,
+                deduplicationMethods:
+                  dedupeMethods.length > 0 ? dedupeMethods : undefined,
+                mergeMethod: mergeMethod ?? 'sequential',
+              }
+            : mc
+        ),
+      }));
+      toast.success('Merged catalog updated');
+    } else {
+      const newId = `aiostreams.merged.${Date.now()}`;
+      setUserData((prev) => ({
+        ...prev,
+        mergedCatalogs: [
+          ...(prev.mergedCatalogs || []),
+          {
+            id: newId,
+            name: name.trim(),
+            type: type.trim(),
+            catalogIds: selectedCatalogs,
+            enabled: true,
+            deduplicationMethods:
+              dedupeMethods.length > 0 ? dedupeMethods : undefined,
+            mergeMethod: mergeMethod ?? 'sequential',
+          },
+        ],
+      }));
+      toast.success('Merged catalog created');
+    }
+    setModalOpen(false);
+  };
+
+  const handleDelete = (id: string) => {
+    setUserData((prev) => ({
+      ...prev,
+      mergedCatalogs: (prev.mergedCatalogs || []).filter((mc) => mc.id !== id),
+    }));
+    toast.success('Merged catalog deleted');
+  };
+
+  return (
+    <SettingsCard
+      title="Merged Catalogs"
+      description="Combine multiple catalogs into a single merged catalog. Useful for creating custom collections from different sources."
+      action={
+        <IconButton
+          size="sm"
+          intent="primary-subtle"
+          icon={<FaPlus />}
+          rounded
+          onClick={openAddModal}
+        />
+      }
+    >
+      {mergedCatalogs.length === 0 && (
+        <p className="text-[--muted] text-base text-center my-8">
+          No merged catalogs yet. Click the + button to create one.
+        </p>
+      )}
+
+      {mergedCatalogs.length > 0 && (
+        <ul className="space-y-2">
+          {mergedCatalogs.map((mc) => (
+            <li key={mc.id}>
+              <div className="relative px-4 py-3 bg-[var(--background)] rounded-[--radius-md] border overflow-hidden">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3 flex-1 min-w-0">
+                    <div className="flex items-center justify-center w-10 h-10 rounded-full bg-[var(--subtle)] flex-shrink-0">
+                      <LuMerge className="text-xl" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm md:text-base font-medium truncate">
+                        {mc.name}
+                      </h3>
+                      <p className="text-xs text-[var(--muted-foreground)]">
+                        {capitalise(mc.type)} • {mc.catalogIds.length} catalogs
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <IconButton
+                      className="h-8 w-8"
+                      icon={<BiEdit />}
+                      intent="primary-subtle"
+                      rounded
+                      onClick={() => openEditModal(mc)}
+                    />
+                    <IconButton
+                      className="h-8 w-8"
+                      icon={<BiTrash />}
+                      intent="alert-subtle"
+                      rounded
+                      onClick={() => handleDelete(mc.id)}
+                    />
+                  </div>
+                </div>
+
+                {/* Settings accordion */}
+                <Accordion type="single" collapsible className="mt-2">
+                  <AccordionItem value="settings">
+                    <AccordionTrigger>
+                      <div className="flex items-center justify-center md:justify-between w-full">
+                        <h4 className="text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wide hidden md:block">
+                          Included Catalogs ({mc.catalogIds.length})
+                        </h4>
+                      </div>
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <div className="space-y-4">
+                        {/* Included catalogs list */}
+                        <div className="flex flex-wrap gap-1.5">
+                          {mc.catalogIds.map((catalogId) => {
+                            const catalog = allCatalogs.find(
+                              (c) => c.value === catalogId
+                            );
+                            const isUnavailable = !catalog;
+                            const availableCatalogsCount = mc.catalogIds.filter(
+                              (id) => allCatalogs.find((c) => c.value === id)
+                            ).length;
+                            const isLastAvailable =
+                              !isUnavailable && availableCatalogsCount === 1;
+                            const isLastCatalog = mc.catalogIds.length === 1;
+
+                            const handleRemove = (e: React.MouseEvent) => {
+                              e.stopPropagation();
+                              if (isLastAvailable) {
+                                toast.error(
+                                  'Cannot remove the last available catalog. Add another catalog first or delete the merged catalog.'
+                                );
+                                return;
+                              }
+                              if (isLastCatalog && isUnavailable) {
+                                // Last catalog and it's unavailable - confirm deletion of merged catalog
+                                setPendingDeleteMergedCatalogId(mc.id);
+                                confirmDeleteLastUnavailable.open();
+                                return;
+                              }
+                              // Normal removal
+                              setUserData((prev) => ({
+                                ...prev,
+                                mergedCatalogs: prev.mergedCatalogs?.map(
+                                  (merged) =>
+                                    merged.id === mc.id
+                                      ? {
+                                          ...merged,
+                                          catalogIds: merged.catalogIds.filter(
+                                            (id) => id !== catalogId
+                                          ),
+                                        }
+                                      : merged
+                                ),
+                              }));
+                            };
+
+                            return (
+                              <span
+                                key={catalogId}
+                                className={`inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md bg-[var(--subtle)] border border-[var(--border)] text-[var(--muted-foreground)] ${catalog?.isDisabled ? 'opacity-60' : ''} ${isUnavailable ? 'bg-orange-50 dark:bg-orange-500/10 border border-orange-300 dark:border-orange-500/50' : ''}`}
+                              >
+                                <span className="font-medium text-[var(--foreground)]">
+                                  {catalog
+                                    ? catalog.name
+                                    : 'Unavailable Catalog'}
+                                </span>
+                                {catalog?.isDisabled && (
+                                  <span className="text-[10px] px-1 py-0.5 rounded text-[--red]">
+                                    Disabled
+                                  </span>
+                                )}
+                                {catalog && (
+                                  <span className="text-[10px] px-1 py-0.5 rounded bg-brand-800/20 border border-[--brand] border-brand-500/50 text-[--muted-foreground]">
+                                    {capitalise(catalog.catalogType)}
+                                  </span>
+                                )}
+                                <CloseButton
+                                  type="button"
+                                  className="ml-0.5"
+                                  size="sm"
+                                  onClick={handleRemove}
+                                  title={
+                                    isLastAvailable
+                                      ? 'Cannot remove last available catalog'
+                                      : 'Remove catalog'
+                                  }
+                                />
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Add/Edit Modal */}
+      <Modal
+        open={modalOpen}
+        onOpenChange={setModalOpen}
+        title={
+          editingMergedCatalog ? 'Edit Merged Catalog' : 'Create Merged Catalog'
+        }
+      >
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSave();
+          }}
+        >
+          <TextInput
+            label="Name"
+            placeholder="e.g., My Combined Movies"
+            value={name}
+            onValueChange={setName}
+          />
+
+          <TextInput
+            label="Type"
+            placeholder="e.g., movie, series, anime"
+            help="The content type for this merged catalog (e.g., movie, series, anime, tv)"
+            value={type}
+            onValueChange={setType}
+          />
+
+          {/* Advanced Catalog Selector */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Catalogs to Merge</label>
+              <span className="text-xs text-[--muted]">
+                {selectedCatalogs.length} selected
+              </span>
+            </div>
+
+            {/* Search */}
+            <TextInput
+              placeholder="Search catalogs..."
+              value={catalogSearch}
+              onValueChange={setCatalogSearch}
+            />
+
+            {/* Catalog list with collapsible addons */}
+            <div className="border rounded-[--radius-md] h-64 overflow-y-auto">
+              {Object.keys(filteredCatalogsByAddon).length === 0 ? (
+                <p className="text-sm text-[--muted] text-center py-8">
+                  {catalogSearch
+                    ? 'No catalogs match your search'
+                    : 'No catalogs available'}
+                </p>
+              ) : (
+                Object.entries(filteredCatalogsByAddon).map(
+                  ([addonName, catalogs]) => {
+                    const isExpanded = expandedAddons.has(addonName);
+                    return (
+                      <div key={addonName} className="border-b last:border-b-0">
+                        {/* Addon header - clickable to expand/collapse */}
+                        <div
+                          onClick={() => toggleAddonExpanded(addonName)}
+                          className="px-3 py-2 bg-[var(--subtle)] cursor-pointer hover:bg-[var(--subtle-highlight)] flex items-center justify-between"
+                        >
+                          <div className="flex items-center gap-2">
+                            <svg
+                              className={`w-4 h-4 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={2}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M9 5l7 7-7 7"
+                              />
+                            </svg>
+                            <span className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wide">
+                              {addonName}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-[var(--muted-foreground)]">
+                              {catalogs.length} catalog
+                              {catalogs.length !== 1 ? 's' : ''}
+                            </span>
+                          </div>
+                        </div>
+                        {/* Catalogs in this addon - shown only when expanded */}
+                        {isExpanded &&
+                          catalogs.map((catalog) => {
+                            const isSelected = selectedCatalogs.includes(
+                              catalog.value
+                            );
+                            return (
+                              <div
+                                key={catalog.value}
+                                onClick={() => toggleCatalog(catalog.value)}
+                                className={`flex items-center gap-3 px-3 py-2 cursor-pointer transition-colors ${
+                                  isSelected
+                                    ? 'bg-[var(--brand-subtle)] hover:bg-[var(--brand-subtle)]'
+                                    : 'hover:bg-[var(--subtle-highlight)]'
+                                } ${catalog.isDisabled ? 'opacity-60' : ''}`}
+                              >
+                                <div
+                                  className={`w-4 h-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                                    isSelected
+                                      ? 'bg-[var(--brand)] border-[var(--brand)]'
+                                      : 'border-[var(--muted)]'
+                                  }`}
+                                >
+                                  {isSelected && (
+                                    <svg
+                                      className="w-3 h-3 text-white"
+                                      fill="none"
+                                      viewBox="0 0 24 24"
+                                      stroke="currentColor"
+                                      strokeWidth={3}
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        d="M5 13l4 4L19 7"
+                                      />
+                                    </svg>
+                                  )}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <span
+                                    className={`text-sm font-medium truncate block ${catalog.isDisabled ? 'text-[var(--muted-foreground)]' : ''}`}
+                                  >
+                                    {catalog.name}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1.5 flex-shrink-0">
+                                  {catalog.isDisabled && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-800/20 border border-orange-500/50 text-orange-300">
+                                      Disabled
+                                    </span>
+                                  )}
+                                  <span className="text-xs px-2 py-0.5 rounded-full text-[var(--muted-foreground)] bg-brand-800/20 border border-brand-500/50">
+                                    {capitalise(catalog.catalogType)}
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    );
+                  }
+                )
+              )}
+            </div>
+
+            {/* Selected catalogs preview */}
+            {selectedCatalogs.length > 0 && (
+              <>
+                {/* Show unavailable catalogs that can be removed */}
+                {(() => {
+                  const unavailableCatalogs = selectedCatalogs.filter(
+                    (id) => !allCatalogs.find((c) => c.value === id)
+                  );
+                  if (unavailableCatalogs.length === 0) return null;
+                  return (
+                    <div className="p-3 rounded-[--radius] bg-orange-50 dark:bg-orange-500/10 border border-orange-300 dark:border-orange-500/50">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm text-orange-700 dark:text-orange-300">
+                          {unavailableCatalogs.length} unavailable catalog
+                          {unavailableCatalogs.length !== 1 ? 's' : ''} found
+                        </p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          intent="warning"
+                          onClick={() =>
+                            setSelectedCatalogs((prev) =>
+                              prev.filter((id) =>
+                                allCatalogs.find((c) => c.value === id)
+                              )
+                            )
+                          }
+                        >
+                          Remove All
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })()}
+                <div className="text-xs text-[--muted]">
+                  Selected ({selectedCatalogs.length}/{maxMergedCatalogSources}
+                  ):{' '}
+                  {selectedCatalogs
+                    .filter((id) => allCatalogs.find((c) => c.value === id))
+                    .slice(0, 3)
+                    .map((id) => {
+                      const cat = allCatalogs.find((c) => c.value === id);
+                      return cat?.name || id;
+                    })
+                    .join(', ')}
+                  {selectedCatalogs.filter((id) =>
+                    allCatalogs.find((c) => c.value === id)
+                  ).length > 3 &&
+                    ` +${
+                      selectedCatalogs.filter((id) =>
+                        allCatalogs.find((c) => c.value === id)
+                      ).length - 3
+                    } more`}
+                </div>
+              </>
+            )}
+          </div>
+
+          <Combobox
+            multiple
+            label="Deduplication Methods"
+            help="Methods to remove duplicate items (applied in order). Leave empty to keep all items."
+            options={[
+              { value: 'id', label: 'By ID - Remove items with same ID' },
+              {
+                value: 'title',
+                label: 'By Title - Remove items with same title',
+              },
+            ]}
+            value={dedupeMethods}
+            onValueChange={(v) => setDedupeMethods(v as ('id' | 'title')[])}
+            placeholder="None - Keep all items"
+            emptyMessage="No deduplication methods available"
+          />
+
+          <Select
+            label="Merge Method"
+            help="How to combine results from the source catalogs."
+            options={[
+              {
+                value: 'sequential',
+                label: 'Sequential',
+              },
+              {
+                value: 'interleave',
+                label: 'Interleave',
+              },
+              {
+                value: 'imdbRating',
+                label: 'IMDb Rating',
+              },
+              {
+                value: 'releaseDateDesc',
+                label: 'Release Date (Newest)',
+              },
+              {
+                value: 'releaseDateAsc',
+                label: 'Release Date (Oldest)',
+              },
+            ]}
+            value={mergeMethod ?? 'sequential'}
+            onValueChange={(v) =>
+              setMergeMethod(v as MergedCatalog['mergeMethod'])
+            }
+          />
+
+          {(mergeMethod === 'imdbRating' ||
+            mergeMethod === 'releaseDateDesc' ||
+            mergeMethod === 'releaseDateAsc') && (
+            <Alert
+              intent="alert"
+              description="Sorting is applied per page only. Items are sorted within each page of results, not globally across all pages. A lower-rated item from page 1 may still appear before a higher-rated item from page 2."
+            />
+          )}
+
+          <Button className="w-full" type="submit">
+            {editingMergedCatalog ? 'Save Changes' : 'Create Merged Catalog'}
+          </Button>
+        </form>
+      </Modal>
+      <ConfirmationDialog {...confirmDeleteLastUnavailable} />
     </SettingsCard>
   );
 }
@@ -1617,6 +2477,9 @@ function SortableCatalogItem({
   });
 
   const { setUserData } = useUserData();
+
+  // Check if this is a merged catalog
+  const isMergedCatalog = catalog.id.startsWith('aiostreams.merged.');
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -1716,9 +2579,8 @@ function SortableCatalogItem({
       <div className="relative px-2.5 py-2 bg-[var(--background)] rounded-[--radius-md] border overflow-hidden">
         {/* Full-height drag handle - rounded vertical oval with spacing */}
         <div
-          className="absolute top-2 bottom-2 left-2 w-5 bg-[var(--muted)] md:bg-[var(--subtle)] md:hover:bg-[var(--subtle-highlight)] cursor-move flex-shrink-0 rounded-full"
-          {...attributes}
-          {...listeners}
+          className={`absolute top-2 bottom-2 left-2 w-5 bg-[var(--muted)] md:bg-[var(--subtle)] md:hover:bg-[var(--subtle-highlight)] cursor-move flex-shrink-0 rounded-full`}
+          {...{ ...attributes, ...listeners }}
         />
 
         {/* Content wrapper */}
@@ -1730,20 +2592,23 @@ function SortableCatalogItem({
                 {catalog.name ?? catalog.id} -{' '}
                 {capitalise(catalog.overrideType ?? catalog.type)}
               </h3>
-              <IconButton
-                className="rounded-full h-5 w-5 md:h-6 md:w-6 flex-shrink-0"
-                icon={<BiEdit />}
-                intent="primary-subtle"
-                onClick={() => setModalOpen(true)}
-              />
+              {!isMergedCatalog && (
+                <IconButton
+                  className="rounded-full h-5 w-5 md:h-6 md:w-6 flex-shrink-0"
+                  icon={<BiEdit />}
+                  intent="primary-subtle"
+                  onClick={() => setModalOpen(true)}
+                />
+              )}
             </div>
             <p className="text-xs md:text-sm text-[var(--muted-foreground)] mb-2 md:mb-0">
-              {catalog.addonName}
+              {isMergedCatalog ? 'Merged Catalog' : catalog.addonName}
             </p>
 
             {/* Mobile Controls Row - only visible on small screens */}
             <div className="flex md:hidden items-center justify-between">
               {/* Position controls - aligned left */}
+
               <div className="flex items-center gap-1">
                 <IconButton
                   rounded
@@ -1763,7 +2628,7 @@ function SortableCatalogItem({
                 />
               </div>
 
-              {/* Enable/disable toggle - aligned right */}
+              {/* Enable/disable toggle */}
               <Switch
                 value={catalog.enabled ?? true}
                 onValueChange={onToggleEnabled}
@@ -1795,8 +2660,7 @@ function SortableCatalogItem({
                 moreHelp="Enable or disable this catalog from being used"
               />
             </div>
-          </div>
-
+          </div>{' '}
           {/* Settings section */}
           <Accordion type="single" collapsible>
             <AccordionItem value="settings">
@@ -1808,6 +2672,20 @@ function SortableCatalogItem({
 
                   {/* Active modifier icons */}
                   <div className="flex items-center gap-2 mr-2">
+                    {/* Merged catalog indicator */}
+                    {isMergedCatalog && (
+                      <Tooltip
+                        trigger={
+                          <div className="flex items-center justify-center h-10 w-10 rounded-full bg-[var(--brand-subtle)]">
+                            <LuMerge className="text-xl text-[var(--brand)]" />
+                          </div>
+                        }
+                      >
+                        Merged Catalog
+                      </Tooltip>
+                    )}
+
+                    {/* Shuffle/reverse toggle - hidden for merged catalogs */}
                     <Tooltip
                       trigger={
                         <IconButton
@@ -1833,6 +2711,8 @@ function SortableCatalogItem({
                       {currentState.charAt(0).toUpperCase() +
                         currentState.slice(1)}
                     </Tooltip>
+
+                    {/* RPDB toggle - hidden for merged catalogs */}
                     <Tooltip
                       trigger={
                         <IconButton
@@ -1870,6 +2750,7 @@ function SortableCatalogItem({
                                 <TbSmartHome />
                               )
                             }
+                            disabled={catalog.onlyOnSearch}
                             intent="primary-subtle"
                             rounded
                             onClick={(e) => {
@@ -1901,7 +2782,9 @@ function SortableCatalogItem({
                           <IconButton
                             className="text-2xl h-10 w-10"
                             icon={
-                              catalog.disableSearch ? (
+                              catalog.onlyOnSearch ? (
+                                <MdSavedSearch />
+                              ) : catalog.disableSearch ? (
                                 <TbSearchOff />
                               ) : (
                                 <TbSearch />
@@ -1914,21 +2797,42 @@ function SortableCatalogItem({
                               setUserData((prev) => ({
                                 ...prev,
                                 catalogModifications:
-                                  prev.catalogModifications?.map((c) =>
-                                    c.id === catalog.id &&
-                                    c.type === catalog.type
-                                      ? {
-                                          ...c,
-                                          disableSearch: !c.disableSearch,
-                                        }
-                                      : c
-                                  ),
+                                  prev.catalogModifications?.map((c) => {
+                                    if (
+                                      c.id !== catalog.id ||
+                                      c.type !== catalog.type
+                                    )
+                                      return c;
+                                    // 3-state cycle: normal -> onlyOnSearch -> disableSearch -> normal
+                                    if (!c.onlyOnSearch && !c.disableSearch) {
+                                      // normal -> onlyOnSearch
+                                      return {
+                                        ...c,
+                                        onlyOnSearch: true,
+                                        onlyOnDiscover: false,
+                                      };
+                                    } else if (c.onlyOnSearch) {
+                                      // onlyOnSearch -> disableSearch
+                                      return {
+                                        ...c,
+                                        onlyOnSearch: false,
+                                        disableSearch: true,
+                                      };
+                                    } else {
+                                      // disableSearch -> normal
+                                      return { ...c, disableSearch: false };
+                                    }
+                                  }),
                               }));
                             }}
                           />
                         }
                       >
-                        Searchable
+                        {catalog.onlyOnSearch
+                          ? 'Search Only'
+                          : catalog.disableSearch
+                            ? 'Search Disabled'
+                            : 'Searchable'}
                       </Tooltip>
                     )}
                   </div>
@@ -1938,6 +2842,8 @@ function SortableCatalogItem({
                 <div className="space-y-4">
                   {/* Large screens: horizontal layout, Medium and below: vertical layout */}
                   <div className="flex flex-col gap-4">
+                    {/* Shuffle/Reverse/RPDB settings - hidden for merged catalogs */}
+
                     <Switch
                       label="Shuffle"
                       help="Randomize the order of catalog items on each request"
@@ -2036,16 +2942,22 @@ function SortableCatalogItem({
                       <Switch
                         label="Discover Only"
                         help="Hide this catalog from the home page and only show it on the Discover page"
-                        moreHelp="This can potentially break the catalog!"
                         side="right"
                         value={catalog.onlyOnDiscover ?? false}
+                        disabled={catalog.onlyOnSearch}
                         onValueChange={(onlyOnDiscover) => {
                           setUserData((prev) => ({
                             ...prev,
                             catalogModifications:
                               prev.catalogModifications?.map((c) =>
                                 c.id === catalog.id && c.type === catalog.type
-                                  ? { ...c, onlyOnDiscover }
+                                  ? {
+                                      ...c,
+                                      onlyOnDiscover,
+                                      onlyOnSearch: onlyOnDiscover
+                                        ? false
+                                        : c.onlyOnSearch,
+                                    }
                                   : c
                               ),
                           }));
@@ -2054,23 +2966,55 @@ function SortableCatalogItem({
                     )}
 
                     {catalog.searchable && (
-                      <Switch
-                        label="Disable Search"
-                        help="Disable the search for this catalog"
-                        side="right"
-                        value={catalog.disableSearch ?? false}
-                        onValueChange={(disableSearch) => {
-                          setUserData((prev) => ({
-                            ...prev,
-                            catalogModifications:
-                              prev.catalogModifications?.map((c) =>
-                                c.id === catalog.id && c.type === catalog.type
-                                  ? { ...c, disableSearch }
-                                  : c
-                              ),
-                          }));
-                        }}
-                      />
+                      <>
+                        <Switch
+                          label="Search Only"
+                          help="Only show this catalog when searching"
+                          side="right"
+                          value={catalog.onlyOnSearch ?? false}
+                          disabled={catalog.disableSearch}
+                          onValueChange={(onlyOnSearch) => {
+                            setUserData((prev) => ({
+                              ...prev,
+                              catalogModifications:
+                                prev.catalogModifications?.map((c) =>
+                                  c.id === catalog.id && c.type === catalog.type
+                                    ? {
+                                        ...c,
+                                        onlyOnSearch,
+                                        onlyOnDiscover: onlyOnSearch
+                                          ? false
+                                          : c.onlyOnDiscover,
+                                      }
+                                    : c
+                                ),
+                            }));
+                          }}
+                        />
+                        <Switch
+                          label="Disable Search"
+                          help="Disable the search for this catalog"
+                          side="right"
+                          value={catalog.disableSearch ?? false}
+                          onValueChange={(disableSearch) => {
+                            setUserData((prev) => ({
+                              ...prev,
+                              catalogModifications:
+                                prev.catalogModifications?.map((c) =>
+                                  c.id === catalog.id && c.type === catalog.type
+                                    ? {
+                                        ...c,
+                                        disableSearch,
+                                        onlyOnSearch: disableSearch
+                                          ? false
+                                          : c.onlyOnSearch,
+                                      }
+                                    : c
+                                ),
+                            }));
+                          }}
+                        />
+                      </>
                     )}
                   </div>
                 </div>

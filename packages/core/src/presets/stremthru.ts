@@ -1,7 +1,7 @@
-import { Option, ParsedStream, Stream, UserData } from '../db';
-import { StreamParser } from '../parser';
-import { constants, ServiceId } from '../utils';
-import { Preset } from './preset';
+import { Option, ParsedStream, Stream, UserData } from '../db/index.js';
+import { StreamParser } from '../parser/index.js';
+import { constants, ServiceId } from '../utils/index.js';
+import { Preset } from './preset.js';
 
 export const stremthruSpecialCases: Partial<
   Record<ServiceId, (credentials: any) => any>
@@ -13,11 +13,22 @@ export const stremthruSpecialCases: Partial<
 };
 
 export class StremThruStreamParser extends StreamParser {
+  protected override isPrivate(
+    stream: Stream,
+    _currentParsedStream: ParsedStream
+  ): boolean | undefined {
+    return stream.name?.includes('🔑') ? true : false;
+  }
+
   protected override getIndexer(
     stream: Stream,
     currentParsedStream: ParsedStream
   ): string | undefined {
     return undefined;
+  }
+
+  protected get filenameRegex(): RegExp | undefined {
+    return this.getRegexForTextAfterEmojis(['📄', '📁']);
   }
 
   protected override getFolderSize(

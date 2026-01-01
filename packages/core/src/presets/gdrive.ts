@@ -1,5 +1,5 @@
-import { baseOptions, Preset } from './preset';
-import { constants, Env } from '../utils';
+import { baseOptions, Preset } from './preset.js';
+import { constants, createLogger, Env } from '../utils/index.js';
 import {
   PresetMetadata,
   Option,
@@ -7,10 +7,10 @@ import {
   UserData,
   ParsedStream,
   Stream,
-} from '../db';
-import { StreamParser } from '../parser';
-import { GDriveAPI } from '../builtins/gdrive';
-import { GoogleOAuth } from '../builtins/gdrive/api';
+} from '../db/index.js';
+import { StreamParser } from '../parser/index.js';
+import { GDriveAPI } from '../builtins/gdrive/index.js';
+import { GoogleOAuth } from '../builtins/gdrive/api.js';
 
 export class GDriveParser extends StreamParser {
   protected override raiseErrorIfNecessary(
@@ -41,92 +41,110 @@ export class GDrivePreset extends Preset {
       constants.META_RESOURCE,
     ];
 
-    const options: Option[] = [
-      {
-        id: 'refreshToken',
-        name: 'Authorise',
-        description: 'Authorise AIOStreams to access your Google Drive',
-        type: 'oauth',
-        required: true,
-        oauth: {
-          authorisationUrl: GoogleOAuth.getAuthorisationUrl(),
-          oauthResultField: {
-            name: 'Refresh Token',
-            description: 'The refresh token for the Google Drive API',
-          },
-        },
-      },
-      ...baseOptions(
-        'Stremio GDrive',
-        supportedResources,
-        Env.BUILTIN_GDRIVE_TIMEOUT
-      ).filter((option) => option.id !== 'url'),
-      {
-        id: 'metadataSource',
-        name: 'Metadata Source',
-        description: 'The source of metadata to use for the addon.',
-        type: 'select',
-        default: 'imdb',
-        options: [
-          {
-            label: 'IMDB',
-            value: 'imdb',
-          },
-          {
-            label: 'TMDB',
-            value: 'tmdb',
-          },
-        ],
-      },
-      {
-        id: 'catalogSort',
-        name: 'Catalog Sort',
-        description:
-          'The sort order of the catalog. Supports multiple values. Select the sort criteria in the order you want them to be applied. Default is "Created Time (Descending)". For more info, see the [API Reference](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list)',
-        type: 'multi-select',
-        default: ['createdTime_desc'],
-        options: [
-          { label: 'Created Time (Ascending)', value: 'createdTime_asc' },
-          { label: 'Created Time (Descending)', value: 'createdTime_desc' },
-          { label: 'Modified Time (Ascending)', value: 'modifiedTime_asc' },
-          { label: 'Modified Time (Descending)', value: 'modifiedTime_desc' },
-          {
-            label: 'Modified By Me Time (Ascending)',
-            value: 'modifiedByMeTime_asc',
-          },
-          {
-            label: 'Modified By Me Time (Descending)',
-            value: 'modifiedByMeTime_desc',
-          },
-          { label: 'Last Viewed (Ascending)', value: 'viewedByMeTime_asc' },
-          { label: 'Last Viewed (Descending)', value: 'viewedByMeTime_desc' },
-          {
-            label: 'Shared With Me (Ascending)',
-            value: 'sharedWithMeTime_asc',
-          },
-          {
-            label: 'Shared With Me (Descending)',
-            value: 'sharedWithMeTime_desc',
-          },
-          { label: 'Name (A-Z)', value: 'name_asc' },
-          { label: 'Name (Z-A)', value: 'name_desc' },
-          { label: 'Name Natural (A-Z)', value: 'name_natural_asc' },
-          { label: 'Name Natural (Z-A)', value: 'name_natural_desc' },
-          { label: 'Recent First', value: 'recency_desc' },
-          { label: 'Oldest First', value: 'recency_asc' },
-          { label: 'Starred (First)', value: 'starred_desc' },
-          { label: 'Starred (Last)', value: 'starred_asc' },
-          { label: 'Folders (First)', value: 'folder_desc' },
-          { label: 'Folders (Last)', value: 'folder_asc' },
-        ],
-      },
-      {
-        id: 'includeAudioFiles',
-        name: 'Include Audio Files',
-        description: 'Whether to include audio files in the search',
-        type: 'boolean',
-      },
-    ];
+    const options: Option[] =
+      Env.BUILTIN_GDRIVE_CLIENT_ID && Env.BUILTIN_GDRIVE_CLIENT_SECRET
+        ? [
+            {
+              id: 'refreshToken',
+              name: 'Authorise',
+              description: 'Authorise AIOStreams to access your Google Drive',
+              type: 'oauth',
+              required: true,
+              oauth: {
+                authorisationUrl: GoogleOAuth.getAuthorisationUrl(),
+                oauthResultField: {
+                  name: 'Refresh Token',
+                  description: 'The refresh token for the Google Drive API',
+                },
+              },
+            },
+            ...baseOptions(
+              'Stremio GDrive',
+              supportedResources,
+              Env.BUILTIN_GDRIVE_TIMEOUT
+            ).filter((option) => option.id !== 'url'),
+            {
+              id: 'metadataSource',
+              name: 'Metadata Source',
+              description: 'The source of metadata to use for the addon.',
+              type: 'select',
+              default: 'imdb',
+              options: [
+                {
+                  label: 'IMDB',
+                  value: 'imdb',
+                },
+                {
+                  label: 'TMDB',
+                  value: 'tmdb',
+                },
+              ],
+            },
+            {
+              id: 'catalogSort',
+              name: 'Catalog Sort',
+              description:
+                'The sort order of the catalog. Supports multiple values. Select the sort criteria in the order you want them to be applied. Default is "Created Time (Descending)". For more info, see the [API Reference](https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list)',
+              type: 'multi-select',
+              default: ['createdTime_desc'],
+              options: [
+                { label: 'Created Time (Ascending)', value: 'createdTime_asc' },
+                {
+                  label: 'Created Time (Descending)',
+                  value: 'createdTime_desc',
+                },
+                {
+                  label: 'Modified Time (Ascending)',
+                  value: 'modifiedTime_asc',
+                },
+                {
+                  label: 'Modified Time (Descending)',
+                  value: 'modifiedTime_desc',
+                },
+                {
+                  label: 'Modified By Me Time (Ascending)',
+                  value: 'modifiedByMeTime_asc',
+                },
+                {
+                  label: 'Modified By Me Time (Descending)',
+                  value: 'modifiedByMeTime_desc',
+                },
+                {
+                  label: 'Last Viewed (Ascending)',
+                  value: 'viewedByMeTime_asc',
+                },
+                {
+                  label: 'Last Viewed (Descending)',
+                  value: 'viewedByMeTime_desc',
+                },
+                {
+                  label: 'Shared With Me (Ascending)',
+                  value: 'sharedWithMeTime_asc',
+                },
+                {
+                  label: 'Shared With Me (Descending)',
+                  value: 'sharedWithMeTime_desc',
+                },
+                { label: 'Name (A-Z)', value: 'name_asc' },
+                { label: 'Name (Z-A)', value: 'name_desc' },
+                { label: 'Name Natural (A-Z)', value: 'name_natural_asc' },
+                { label: 'Name Natural (Z-A)', value: 'name_natural_desc' },
+                { label: 'Recent First', value: 'recency_desc' },
+                { label: 'Oldest First', value: 'recency_asc' },
+                { label: 'Starred (First)', value: 'starred_desc' },
+                { label: 'Starred (Last)', value: 'starred_asc' },
+                { label: 'Folders (First)', value: 'folder_desc' },
+                { label: 'Folders (Last)', value: 'folder_asc' },
+              ],
+            },
+            {
+              id: 'includeAudioFiles',
+              name: 'Include Audio Files',
+              description: 'Whether to include audio files in the search',
+              type: 'boolean',
+            },
+          ]
+        : [];
 
     return {
       ID: 'stremio-gdrive',
@@ -141,6 +159,13 @@ export class GDrivePreset extends Preset {
       SUPPORTED_SERVICES: [],
       OPTIONS: options,
       BUILTIN: true,
+      DISABLED:
+        !Env.BUILTIN_GDRIVE_CLIENT_ID || !Env.BUILTIN_GDRIVE_CLIENT_SECRET
+          ? {
+              reason: 'Not configured',
+              disabled: true,
+            }
+          : undefined,
     };
   }
 
@@ -188,15 +213,18 @@ export class GDrivePreset extends Preset {
         );
       }
     }
-    const config = this.base64EncodeJSON({
-      refreshToken: options.refreshToken,
-      metadataSource: options.metadataSource || 'imdb',
-      includeAudioFiles: options.includeAudioFiles ?? false,
-      tmdbReadAccessToken:
-        options.metadataSource === 'tmdb'
-          ? userData.tmdbAccessToken || Env.TMDB_ACCESS_TOKEN
-          : undefined,
-    });
+    const config = this.base64EncodeJSON(
+      {
+        refreshToken: options.refreshToken,
+        metadataSource: options.metadataSource || 'imdb',
+        includeAudioFiles: options.includeAudioFiles ?? false,
+        tmdbReadAccessToken:
+          options.metadataSource === 'tmdb'
+            ? userData.tmdbAccessToken || Env.TMDB_ACCESS_TOKEN
+            : undefined,
+      },
+      'urlSafe'
+    );
     return `${this.METADATA.URL}/${config}/manifest.json`;
   }
 }

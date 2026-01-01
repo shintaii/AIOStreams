@@ -1,6 +1,11 @@
-import { Addon, Option, UserData } from '../db';
-import { Preset, baseOptions } from './preset';
-import { Env, RESOURCES, SUBTITLES_RESOURCE } from '../utils';
+import { Addon, Option, UserData } from '../db/index.js';
+import { Preset, baseOptions } from './preset.js';
+import {
+  constants,
+  Env,
+  RESOURCES,
+  SUBTITLES_RESOURCE,
+} from '../utils/index.js';
 
 export class OpenSubtitlesV3PlusPreset extends Preset {
   static override get METADATA() {
@@ -104,6 +109,10 @@ export class OpenSubtitlesV3PlusPreset extends Preset {
       { label: 'Spanish (EU)', value: 'sp' },
       { label: 'Santali', value: 'sx' },
       { label: 'Toki Pona', value: 'tp' },
+      { label: 'Chinese (simplified)', value: 'zh-cn' },
+      { label: 'Portuguese', value: 'pt-pt' },
+      { label: 'Portuguese (BR)', value: 'pt-br' },
+      { label: 'Chinese (traditional)', value: 'zh-tw' },
     ];
 
     const options: Option[] = [
@@ -169,6 +178,7 @@ export class OpenSubtitlesV3PlusPreset extends Preset {
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [],
       SUPPORTED_RESOURCES: supportedResources,
+      CATEGORY: constants.PresetCategory.SUBTITLES,
     };
   }
 

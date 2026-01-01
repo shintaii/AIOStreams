@@ -1,12 +1,12 @@
-import { Addon, Option, ParsedStream, Stream, UserData } from '../db';
-import { Preset, baseOptions } from './preset';
-import { constants, Env } from '../utils';
-import { FileParser, StreamParser } from '../parser';
+import { Addon, Option, ParsedStream, Stream, UserData } from '../db/index.js';
+import { Preset, baseOptions } from './preset.js';
+import { constants, Env } from '../utils/index.js';
+import { FileParser, StreamParser } from '../parser/index.js';
 import {
   debridioSocialOption,
   debridioApiKeyOption,
   debridioLogo,
-} from './debridio';
+} from './debridio.js';
 
 class DebridioWatchtowerStreamParser extends StreamParser {
   override parse(stream: Stream): ParsedStream | { skip: true } {
@@ -73,6 +73,21 @@ export class DebridioWatchtowerPreset extends Preset {
       ),
       debridioApiKeyOption,
       debridioSocialOption,
+      {
+        id: 'mediaTypes',
+        name: 'Media Types',
+        description:
+          'Limits this addon to the selected media types for streams. For example, selecting "Movie" means this addon will only be used for movie streams (if the addon supports them). Leave empty to allow all.',
+        type: 'multi-select',
+        required: false,
+        options: [
+          { label: 'Movie', value: 'movie' },
+          { label: 'Series', value: 'series' },
+          { label: 'Anime', value: 'anime' },
+        ],
+        default: [],
+        showInSimpleMode: false,
+      },
     ];
 
     return {

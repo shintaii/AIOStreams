@@ -5,10 +5,10 @@ import {
   ParsedStream,
   Stream,
   AIOStream,
-} from '../db';
-import { Preset, baseOptions } from './preset';
-import { constants, Env, RESOURCES } from '../utils';
-import { StreamParser } from '../parser';
+} from '../db/index.js';
+import { Preset, baseOptions } from './preset.js';
+import { constants, Env, RESOURCES } from '../utils/index.js';
+import { StreamParser } from '../parser/index.js';
 
 class DMMCastStreamParser extends StreamParser {
   protected override getFilename(
@@ -73,13 +73,14 @@ export class DMMCastPreset extends Preset {
       },
       {
         id: 'timeout',
-        name: 'Timeout',
+        name: 'Timeout (ms)',
         description: 'The timeout for this addon',
         type: 'number',
         default: Env.DEFAULT_DMM_CAST_TIMEOUT || Env.DEFAULT_TIMEOUT,
         constraints: {
           min: Env.MIN_TIMEOUT,
           max: Env.MAX_TIMEOUT,
+          forceInUi: false,
         },
       },
       {
@@ -94,7 +95,7 @@ export class DMMCastPreset extends Preset {
           label: resource,
           value: resource,
         })),
-        showInNoobMode: false,
+        showInSimpleMode: false,
       },
       {
         id: 'socials',

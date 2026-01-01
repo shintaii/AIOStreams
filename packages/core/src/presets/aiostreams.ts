@@ -5,11 +5,12 @@ import {
   ParsedStream,
   Stream,
   AIOStream,
-} from '../db';
-import { Preset, baseOptions } from './preset';
-import { constants, Env, formatZodError, RESOURCES } from '../utils';
-import { StreamParser } from '../parser';
-import { createLogger } from '../utils';
+} from '../db/index.js';
+import { Preset, baseOptions } from './preset.js';
+import { constants, Env, formatZodError, RESOURCES } from '../utils/index.js';
+import { StreamParser } from '../parser/index.js';
+import { createLogger } from '../utils/index.js';
+import { parseAgeString } from '../parser/utils.js';
 
 const logger = createLogger('parser');
 
@@ -59,13 +60,17 @@ class AIOStreamsStreamParser extends StreamParser {
       service: aioStream.streamData?.service,
       duration: aioStream.streamData?.duration,
       library: aioStream.streamData?.library ?? false,
-      age: aioStream.streamData?.age,
+      age:
+        typeof aioStream.streamData?.age === 'string'
+          ? parseAgeString(aioStream.streamData?.age)
+          : aioStream.streamData?.age,
       message: aioStream.streamData?.message,
       torrent: aioStream.streamData?.torrent,
       parsedFile: aioStream.streamData?.parsedFile,
       keywordMatched: aioStream.streamData?.keywordMatched,
       streamExpressionMatched: aioStream.streamData?.streamExpressionMatched,
       regexMatched: aioStream.streamData?.regexMatched,
+      seadex: aioStream.streamData?.seadex,
       originalName: aioStream.name ?? undefined,
       originalDescription: (aioStream.description || stream.title) ?? undefined,
     };
@@ -85,7 +90,7 @@ export class AIOStreamsPreset extends Preset {
         description:
           "What to call this addon. Leave empty if you don't want to include the name of this addon in the stream results.",
         type: 'string',
-        required: true,
+        required: false,
         default: 'AIOStreams',
       },
       {
@@ -97,7 +102,7 @@ export class AIOStreamsPreset extends Preset {
       },
       {
         id: 'timeout',
-        name: 'Timeout',
+        name: 'Timeout (ms)',
         description: 'The timeout for this addon',
         type: 'number',
         default: Env.DEFAULT_TIMEOUT,
@@ -110,16 +115,71 @@ export class AIOStreamsPreset extends Preset {
       {
         id: 'resources',
         name: 'Resources',
-        showInNoobMode: false,
+        showInSimpleMode: false,
         description:
           'Optionally override the resources that are fetched from this addon ',
         type: 'multi-select',
         required: false,
         default: undefined,
         options: RESOURCES.map((resource) => ({
-          label: resource,
+          label: constants.RESOURCE_LABELS[resource],
           value: resource,
         })),
+      },
+      {
+        id: 'mediaTypes',
+        name: 'Media Types',
+        description:
+          'Limits this addon to the selected media types for streams. For example, selecting "Movie" means this addon will only be used for movie streams (if the addon supports them). Leave empty to allow all.',
+        type: 'multi-select',
+        required: false,
+        showInSimpleMode: false,
+        options: [
+          { label: 'Movie', value: 'movie' },
+          { label: 'Series', value: 'series' },
+          { label: 'Anime', value: 'anime' },
+        ],
+        default: [],
+      },
+      {
+        id: 'libraryAddon',
+        name: 'Library Addon',
+        description:
+          'Whether to mark this addon as a library addon. This will result in all streams from this addon being marked as library streams.',
+        type: 'boolean',
+        required: false,
+        showInSimpleMode: false,
+        default: false,
+      },
+      {
+        id: 'formatPassthrough',
+        name: 'Format Passthrough',
+        description:
+          'Whether to pass through the stream formatting. This means your formatting will not be applied and original stream formatting is retained.',
+        type: 'boolean',
+        required: false,
+        default: false,
+        showInSimpleMode: false,
+      },
+      {
+        id: 'resultPassthrough',
+        name: 'Result Passthrough',
+        description:
+          'If enabled, all results from this addon will never be filtered out and always included in the final stream list.',
+        type: 'boolean',
+        required: false,
+        default: false,
+        showInSimpleMode: false,
+      },
+      {
+        id: 'forceToTop',
+        name: 'Force to Top',
+        description:
+          'Whether to force results from this addon to be pushed to the top of the stream list.',
+        type: 'boolean',
+        required: false,
+        default: false,
+        showInSimpleMode: false,
       },
     ];
 
@@ -135,6 +195,7 @@ export class AIOStreamsPreset extends Preset {
       OPTIONS: options,
       SUPPORTED_STREAM_TYPES: [],
       SUPPORTED_RESOURCES: [],
+      CATEGORY: constants.PresetCategory.MISC,
     };
   }
 
@@ -155,12 +216,16 @@ export class AIOStreamsPreset extends Preset {
     options: Record<string, any>
   ): Addon {
     return {
-      name: options.name || this.METADATA.NAME,
+      name: options.name ?? this.METADATA.NAME,
       manifestUrl: options.manifestUrl.replace('stremio://', 'https://'),
       enabled: true,
-      library: false,
+      library: options.libraryAddon ?? false,
       resources: options.resources || undefined,
       timeout: options.timeout || this.METADATA.TIMEOUT,
+      resultPassthrough: options.resultPassthrough ?? false,
+      formatPassthrough: options.formatPassthrough ?? false,
+      forceToTop: options.forceToTop ?? false,
+      mediaTypes: options.mediaTypes || [],
       preset: {
         id: '',
         type: this.METADATA.ID,

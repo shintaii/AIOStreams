@@ -1,7 +1,9 @@
-import { ParsedStream, SortCriterion, UserData } from '../db/schemas';
-import { createLogger, getTimeTakenSincePoint } from '../utils';
-import { VISUAL_TAGS } from '../utils/constants';
-import { AUDIO_TAGS } from '../utils/constants';
+import { ParsedStream, SortCriterion, UserData } from '../db/schemas.js';
+import {
+  createLogger,
+  getTimeTakenSincePoint,
+  constants,
+} from '../utils/index.js';
 
 const logger = createLogger('sorter');
 
@@ -151,6 +153,10 @@ class StreamSorter {
           return multiplier * (stream.size ?? 0);
         case 'seeders':
           return multiplier * (stream.torrent?.seeders ?? 0);
+        case 'private':
+          return multiplier * (stream.torrent?.private ? 1 : 0);
+        case 'age':
+          return multiplier * (stream.age ?? 0);
         case 'encode': {
           if (!userData.preferredEncodes) {
             return 0;
@@ -213,7 +219,7 @@ class StreamSorter {
           let minIndex = userData.preferredVisualTags?.length;
 
           for (const tag of effectiveVisualTags) {
-            if (VISUAL_TAGS.includes(tag as any)) {
+            if (constants.VISUAL_TAGS.includes(tag as any)) {
               const idx = userData.preferredVisualTags?.indexOf(tag as any);
               if (idx !== undefined && idx !== -1 && idx < minIndex) {
                 minIndex = idx;
@@ -241,7 +247,7 @@ class StreamSorter {
           let minAudioIndex = userData.preferredAudioTags.length;
 
           for (const tag of effectiveAudioTags) {
-            if (AUDIO_TAGS.includes(tag as any)) {
+            if (constants.AUDIO_TAGS.includes(tag as any)) {
               const idx = userData.preferredAudioTags?.indexOf(tag as any);
               if (idx !== undefined && idx !== -1 && idx < minAudioIndex) {
                 minAudioIndex = idx;
@@ -264,7 +270,10 @@ class StreamSorter {
           if (minLanguageIndex === undefined) {
             return 0;
           }
-          for (const language of stream.parsedFile?.languages || ['Unknown']) {
+          const effectiveLanguages = stream.parsedFile?.languages?.length
+            ? stream.parsedFile.languages
+            : ['Unknown'];
+          for (const language of effectiveLanguages) {
             const idx = userData.preferredLanguages?.indexOf(language as any);
             if (idx !== undefined && idx !== -1 && idx < minLanguageIndex) {
               minLanguageIndex = idx;
@@ -291,6 +300,19 @@ class StreamSorter {
             (service) => service.id === stream.service?.id
           );
           return multiplier * -(index === -1 ? Infinity : index);
+        }
+        case 'seadex': {
+          // SeaDex sorting: Best (2) > On SeaDex (1) > Not on SeaDex (0)
+          if (!stream.seadex) {
+            return multiplier * 0;
+          }
+          if (stream.seadex.isBest) {
+            return multiplier * 2;
+          }
+          if (stream.seadex.isSeadex) {
+            return multiplier * 1;
+          }
+          return multiplier * 0;
         }
         default:
           return 0;

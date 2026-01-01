@@ -1,4 +1,4 @@
-import { Extras, ExtrasSchema } from '../db/schemas';
+import { Extras, ExtrasSchema } from '../db/schemas.js';
 
 export class ExtrasParser {
   private extras: Partial<Extras>;
@@ -48,6 +48,10 @@ export class ExtrasParser {
 
   set skip(value: number | undefined) {
     this.extras = { ...this.extras, skip: value };
+  }
+
+  public has(key: keyof Extras): boolean {
+    return key in this.extras && this.extras[key] !== undefined;
   }
 
   public toString(): string {

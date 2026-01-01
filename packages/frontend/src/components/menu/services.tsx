@@ -203,7 +203,9 @@ function Content() {
         // Check if any required credential is missing
         return (
           service.enabled &&
-          svcMeta.credentials.some((cred) => !service.credentials?.[cred.id])
+          svcMeta.credentials.some(
+            (cred) => !service.credentials?.[cred.id] && cred.required
+          )
         );
       })
       .map((service) => status.settings.services[service.id]?.name) ?? [];
@@ -303,6 +305,7 @@ function Content() {
         description="Provide your RPDB API key if you want catalogs of supported types to use posters from RPDB"
       >
         <PasswordInput
+          autoComplete="new-password"
           label="RPDB API Key"
           help={
             <span>
@@ -418,12 +421,41 @@ function Content() {
         />
       </SettingsCard>
 
+      <SettingsCard
+        title="TVDB"
+        description="Provide your TVDB API key to also fetch metadata from TVDB."
+      >
+        <PasswordInput
+          label="TVDB API Key"
+          value={userData.tvdbApiKey}
+          placeholder="Enter your TVDB API Key"
+          help={
+            <span>
+              Sign up for a <b>free</b> API Key at{' '}
+              <a
+                href="https://www.thetvdb.com/api-information"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[--brand] hover:underline"
+              >
+                TVDB.{' '}
+              </a>
+            </span>
+          }
+          onValueChange={(value) => {
+            setUserData((prev) => ({
+              ...prev,
+              tvdbApiKey: value,
+            }));
+          }}
+        />
+      </SettingsCard>
+
       <ServiceModal
         open={modalOpen}
         onOpenChange={setModalOpen}
         serviceId={modalService}
         values={modalValues}
-        onChange={handleModalValuesChange}
         onSubmit={handleModalSubmit}
         onClose={handleModalClose}
       />
@@ -496,7 +528,6 @@ function ServiceModal({
   onOpenChange,
   serviceId,
   values,
-  onChange,
   onSubmit,
   onClose,
 }: {
@@ -504,23 +535,28 @@ function ServiceModal({
   onOpenChange: (v: boolean) => void;
   serviceId: ServiceId | null;
   values: Record<string, any>;
-  onChange: (v: Record<string, any>) => void;
   onSubmit: (v: Record<string, any>) => void;
   onClose: () => void;
 }) {
   const { status } = useStatus();
+  const [localValues, setLocalValues] = useState<Record<string, any>>({});
+
+  useEffect(() => {
+    if (open) {
+      setLocalValues(values);
+    }
+  }, [open, values]);
+
   if (!status) return null;
   if (!serviceId) return null;
   const meta = status.settings.services[serviceId]!;
   const credentials = meta.credentials || [];
 
   const handleCredentialChange = (optId: string, newValue: any) => {
-    // Create a new object with all existing values plus the updated one
-    const updatedValues = {
-      ...values,
+    setLocalValues((prev) => ({
+      ...prev,
       [optId]: newValue,
-    };
-    onChange(updatedValues);
+    }));
   };
 
   return (
@@ -533,15 +569,18 @@ function ServiceModal({
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
-          onSubmit(values);
+          onSubmit(localValues);
         }}
       >
         {credentials.map((opt) => (
           <TemplateOption
             key={opt.id}
-            option={opt}
-            value={opt.forced || opt.default || values[opt.id]}
-            onChange={(v) => handleCredentialChange(opt.id, v)}
+            option={{
+              ...opt,
+              required: false, // override required to false to allow unsetting
+            }}
+            value={opt.forced || opt.default || localValues[opt.id]}
+            onChange={(v) => handleCredentialChange(opt.id, v || undefined)}
           />
         ))}
         <div className="flex gap-2">

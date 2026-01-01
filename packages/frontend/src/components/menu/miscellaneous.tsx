@@ -16,6 +16,7 @@ import {
 import { Select } from '../ui/select';
 import { Alert } from '../ui/alert';
 import { useMode } from '@/context/mode';
+import { NumberInput } from '../ui/number-input/number-input';
 
 export function MiscellaneousMenu() {
   return (
@@ -173,6 +174,118 @@ function Content() {
         )}
         {mode === 'pro' && (
           <SettingsCard
+            title="Are you still there?"
+            description="Stop autoplay after a number of consecutive episodes so the player returns to stream selection."
+          >
+            <Switch
+              label="Enable"
+              side="right"
+              value={userData.areYouStillThere?.enabled}
+              onValueChange={(value) => {
+                setUserData((prev) => ({
+                  ...prev,
+                  areYouStillThere: {
+                    ...prev.areYouStillThere,
+                    enabled: value,
+                  },
+                }));
+              }}
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <NumberInput
+                label="Episodes before check"
+                min={1}
+                defaultValue={3}
+                disabled={!userData.areYouStillThere?.enabled}
+                value={userData.areYouStillThere?.episodesBeforeCheck ?? 3}
+                onValueChange={(value) => {
+                  setUserData((prev) => ({
+                    ...prev,
+                    areYouStillThere: {
+                      ...prev.areYouStillThere,
+                      episodesBeforeCheck: Math.max(1, Number(value || 3)),
+                    },
+                  }));
+                }}
+              />
+              <NumberInput
+                label="Cooldown (minutes)"
+                min={1}
+                defaultValue={60}
+                disabled={!userData.areYouStillThere?.enabled}
+                value={userData.areYouStillThere?.cooldownMinutes ?? 60}
+                onValueChange={(value) => {
+                  setUserData((prev) => ({
+                    ...prev,
+                    areYouStillThere: {
+                      ...prev.areYouStillThere,
+                      cooldownMinutes: Math.max(1, Number(value || 60)),
+                    },
+                  }));
+                }}
+              />
+            </div>
+          </SettingsCard>
+        )}
+        {mode === 'pro' && (
+          <SettingsCard
+            title="Cache and Play"
+            description={
+              <div className="space-y-2">
+                <p>
+                  This feature allows you to have uncached streams simply wait
+                  for it to finish downloading and then play it rather than
+                  showing a short video telling you to try again later. Only
+                  recommended for Usenet downloads as they finish a lot quicker
+                  in most cases.
+                </p>
+                <Alert intent="info-basic">
+                  <p className="text-sm">
+                    This feature will only work for built-in addons.
+                  </p>
+                </Alert>
+              </div>
+            }
+          >
+            <Switch
+              label="Enable"
+              side="right"
+              value={userData.cacheAndPlay?.enabled}
+              onValueChange={(value) => {
+                setUserData((prev) => ({
+                  ...prev,
+                  cacheAndPlay: {
+                    ...prev.cacheAndPlay,
+                    enabled: value,
+                  },
+                }));
+              }}
+            />
+            <Combobox
+              label="Stream Types"
+              options={['usenet', 'torrent'].map((streamType) => ({
+                label: streamType,
+                value: streamType,
+                textValue: streamType,
+              }))}
+              multiple
+              emptyMessage="No stream types found"
+              defaultValue={['usenet']}
+              value={userData.cacheAndPlay?.streamTypes ?? ['usenet']}
+              onValueChange={(value) => {
+                setUserData((prev) => ({
+                  ...prev,
+                  cacheAndPlay: {
+                    ...prev.cacheAndPlay,
+                    streamTypes: value as ('usenet' | 'torrent')[],
+                  },
+                }));
+              }}
+            />
+          </SettingsCard>
+        )}
+        {mode === 'pro' && (
+          <SettingsCard
             title="External Downloads"
             description="Adds a stream that automatically opens the stream in your browser below every stream for easier downloading"
           >
@@ -197,27 +310,53 @@ function Content() {
             <Switch
               label="Enable"
               side="right"
-              value={userData.showStatistics}
+              value={userData.statistics?.enabled}
               onValueChange={(value) => {
                 setUserData((prev) => ({
                   ...prev,
-                  showStatistics: value,
+                  statistics: {
+                    ...prev.statistics,
+                    enabled: value,
+                  },
                 }));
               }}
             />
             <Select
               label="Statistics Position"
               help="Whether to show the statistic streams at the top or bottom of the stream list."
-              disabled={!userData.showStatistics}
+              disabled={!userData.statistics?.enabled}
               options={[
                 { label: 'Top', value: 'top' },
                 { label: 'Bottom', value: 'bottom' },
               ]}
-              value={userData.statisticsPosition || 'bottom'}
+              value={userData.statistics?.position || 'bottom'}
               onValueChange={(value) => {
                 setUserData((prev) => ({
                   ...prev,
-                  statisticsPosition: value as 'top' | 'bottom',
+                  statistics: {
+                    ...prev.statistics,
+                    position: value as 'top' | 'bottom',
+                  },
+                }));
+              }}
+            />
+            <Combobox
+              label="Statistics to Show"
+              options={['addon', 'filter'].map((statistic) => ({
+                label: statistic,
+                value: statistic,
+              }))}
+              emptyMessage="No statistics to show"
+              multiple
+              defaultValue={['addon', 'filter']}
+              value={userData.statistics?.statsToShow}
+              onValueChange={(value) => {
+                setUserData((prev) => ({
+                  ...prev,
+                  statistics: {
+                    ...prev.statistics,
+                    statsToShow: value as ('addon' | 'filter')[],
+                  },
                 }));
               }}
             />

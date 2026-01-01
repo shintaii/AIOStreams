@@ -1,8 +1,7 @@
 import { z } from 'zod';
-import { Cache, makeRequest, Env, TYPES } from '../utils';
-import { Wrapper } from '../wrapper';
-import { Metadata } from './utils';
-import { Meta, MetaSchema } from '../db';
+import { Cache, makeRequest, Env, TYPES } from '../utils/index.js';
+import { Metadata } from './utils.js';
+import { Meta, MetaSchema } from '../db/schemas.js';
 
 const IMDBSuggestionSchema = z.object({
   d: z.array(
@@ -51,11 +50,28 @@ export class IMDBMetadata {
       if (!cinemetaData.name || !cinemetaData.year) {
         throw new Error('Cinemeta data is missing title or year');
       }
-      let year = Number(cinemetaData.releaseInfo?.toString().split('-')[0]);
-      let yearEnd = Number(cinemetaData.releaseInfo?.toString().split('-')[1]);
-      if (isNaN(yearEnd)) {
-        yearEnd = new Date().getFullYear();
+      let year = NaN;
+      let yearEnd = NaN;
+
+      if (cinemetaData.releaseInfo) {
+        const parts = cinemetaData.releaseInfo.toString().split(/[-–—]/);
+        const start = parts[0]?.trim();
+        const end = parts[1]?.trim();
+
+        if (start) {
+          year = Number(start);
+        }
+
+        if (end) {
+          // Handles 'YYYY-YYYY'
+          yearEnd = Number(end);
+        } else if (parts.length > 1) {
+          // Handles 'YYYY-' (ongoing series)
+          yearEnd = new Date().getFullYear();
+        }
       }
+
+      // Fallback to cinemetaData.year if parsing releaseInfo fails
       if (isNaN(year) && Number.isInteger(Number(cinemetaData.year))) {
         year = Number(cinemetaData.year);
       }
@@ -67,7 +83,7 @@ export class IMDBMetadata {
     }
   }
 
-  private async getImdbSuggestionData(
+  public async getImdbSuggestionData(
     id: string,
     type: string
   ): Promise<Metadata> {
@@ -79,7 +95,7 @@ export class IMDBMetadata {
 
     const url = `${this.IMDB_SUGGESTION_API}${id}.json`;
     const response = await makeRequest(url, {
-      timeout: 10000,
+      timeout: 5000,
       headers: {
         'Content-Type': 'application/json',
       },
@@ -93,8 +109,11 @@ export class IMDBMetadata {
     const year = item.y;
     let yearEnd: number | undefined = undefined;
     const yearString = item.yr;
-    if (yearString && yearString.includes('-')) {
-      yearEnd = Number(yearString.split('-')[1]);
+    if (yearString) {
+      const years = yearString.split(/[-–—]/).map((y) => y.trim());
+      if (years.length > 1) {
+        yearEnd = Number(years[1]);
+      }
     }
     this.titleCache.set(key, { title, year, yearEnd }, this.titleCacheTTL);
     return { title, year, yearEnd };
@@ -107,7 +126,7 @@ export class IMDBMetadata {
       return cached;
     }
     const response = await makeRequest(url, {
-      timeout: 1000,
+      timeout: 5000,
     });
     const meta = MetaSchema.parse(((await response.json()) as any).meta);
     this.cinemetaCache.set(url, meta, this.cinemetaCacheTTL);

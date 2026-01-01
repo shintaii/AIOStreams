@@ -1,8 +1,8 @@
-import { ParsedStream, PresetMetadata, Stream } from '../db';
-import { EasynewsPreset, EasynewsParser } from './easynews';
-import { constants, Env } from '../utils';
-import { baseOptions } from './preset';
-import { StreamParser } from '../parser';
+import { ParsedStream, PresetMetadata, Stream } from '../db/index.js';
+import { EasynewsPreset, EasynewsParser } from './easynews.js';
+import { constants, Env } from '../utils/index.js';
+import { baseOptions } from './preset.js';
+import { StreamParser } from '../parser/index.js';
 
 class EasynewsPlusPlusParser extends EasynewsParser {
   protected override get ageRegex(): RegExp {
@@ -49,6 +49,21 @@ export class EasynewsPlusPlusPreset extends EasynewsPreset {
           super.METADATA.SUPPORTED_RESOURCES,
           Env.DEFAULT_EASYNEWS_PLUS_PLUS_TIMEOUT || Env.DEFAULT_TIMEOUT
         ),
+        {
+          id: 'mediaTypes',
+          name: 'Media Types',
+          description:
+            'Limits this addon to the selected media types for streams. For example, selecting "Movie" means this addon will only be used for movie streams (if the addon supports them). Leave empty to allow all.',
+          type: 'multi-select',
+          required: false,
+          options: [
+            { label: 'Movie', value: 'movie' },
+            { label: 'Series', value: 'series' },
+            { label: 'Anime', value: 'anime' },
+          ],
+          default: [],
+          showInSimpleMode: false,
+        },
         {
           id: 'strictTitleMatching',
           name: 'Strict Title Matching',

@@ -1,5 +1,12 @@
-import { StreamProxyConfig } from '../db';
-import { Cache, createLogger, maskSensitiveInfo, Env } from '../utils';
+import z from 'zod';
+import { StreamProxyConfig } from '../db/schemas.js';
+import {
+  Cache,
+  createLogger,
+  maskSensitiveInfo,
+  Env,
+  constants,
+} from '../utils/index.js';
 
 const logger = createLogger('proxy');
 const cache = Cache.getInstance<string, string>('publicIp');
@@ -7,6 +14,7 @@ const cache = Cache.getInstance<string, string>('publicIp');
 export interface ProxyStream {
   url: string;
   filename?: string;
+  type?: 'nzb' | 'stream';
   headers?: {
     request?: Record<string, string>;
     response?: Record<string, string>;
@@ -14,7 +22,7 @@ export interface ProxyStream {
 }
 
 type ValidatedStreamProxyConfig = StreamProxyConfig & {
-  id: 'mediaflow' | 'stremthru';
+  id: 'mediaflow' | 'stremthru' | 'builtin';
   url: string;
   credentials: string;
 };
@@ -25,6 +33,10 @@ export abstract class BaseProxy {
     /^(10\.|127\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/;
 
   constructor(config: StreamProxyConfig) {
+    if (config.id === constants.BUILTIN_SERVICE) {
+      config.url = Env.BASE_URL;
+      config.publicUrl = undefined;
+    }
     if (!config.id || !config.credentials || !config.url) {
       throw new Error('Proxy configuration is missing');
     }
@@ -49,7 +61,8 @@ export abstract class BaseProxy {
   protected abstract getPublicIpEndpoint(): string;
   protected abstract getPublicIpFromResponse(data: any): string | null;
   protected abstract generateStreamUrls(
-    streams: ProxyStream[]
+    streams: ProxyStream[],
+    encrypt?: boolean
   ): Promise<string[] | null>;
 
   public async getPublicIp(): Promise<string | null> {
@@ -98,6 +111,16 @@ export abstract class BaseProxy {
     const data = await response.json();
     const publicIp = this.getPublicIpFromResponse(data);
 
+    const { error, success } = z
+      .union([z.ipv4(), z.ipv6()])
+      .safeParse(publicIp);
+    if (error || !success) {
+      logger.error(
+        `IP Response of ${publicIp} could not be parsed as a valid IP`
+      );
+      throw new Error(`Proxy did not respond with a valid public IP`);
+    }
+
     if (publicIp && cache) {
       await cache.set(cacheKey, publicIp, Env.PROXY_IP_CACHE_TTL);
     } else {
@@ -112,7 +135,10 @@ export abstract class BaseProxy {
 
   protected abstract getHeaders(): Record<string, string>;
 
-  public async generateUrls(streams: ProxyStream[]): Promise<string[] | null> {
+  public async generateUrls(
+    streams: ProxyStream[],
+    encrypt?: boolean
+  ): Promise<string[] | { error: string } | null> {
     if (!streams.length) {
       return [];
     }
@@ -122,7 +148,7 @@ export abstract class BaseProxy {
     }
 
     try {
-      let urls = await this.generateStreamUrls(streams);
+      let urls = await this.generateStreamUrls(streams, encrypt);
       const publicUrl = this.config.publicUrl;
       if (publicUrl && urls) {
         const publicUrlObj = new URL(publicUrl);
@@ -154,7 +180,7 @@ export abstract class BaseProxy {
             )
           : undefined
       );
-      return null;
+      return { error: error instanceof Error ? error.message : String(error) };
     }
   }
 }
