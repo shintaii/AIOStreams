@@ -9,7 +9,7 @@ import {
   fromUrlSafeBase64,
   formatZodError,
 } from '../utils/index.js';
-import { isVideoFile, selectFileInTorrentOrNZB } from './utils.js';
+import { isVideoFile, selectFileInTorrentOrNZB, hashNzbUrl } from './utils.js';
 import {
   DebridServiceConfig,
   DebridDownload,
@@ -17,6 +17,7 @@ import {
   DebridError,
   DebridFile,
   UsenetDebridService,
+  DebridFailureCache,
 } from './base.js';
 import { ParsedResult, parseTorrentTitle } from '@viren070/parse-torrent-title';
 import z, { ZodError } from 'zod';
@@ -423,10 +424,9 @@ enum Category {
 export abstract class UsenetStreamService implements UsenetDebridService {
   protected readonly webdavClient: WebDAVClient;
   protected readonly api: SABnzbdApi;
-  protected static resolveCache = Cache.getInstance<
-    string,
-    string | { message: string; code: DebridError['code'] }
-  >('usenet-stream:link');
+  protected static resolveCache = Cache.getInstance<string, string>(
+    'usenet-stream:link'
+  );
   protected static libraryCache = Cache.getInstance<string, DebridDownload[]>(
     'usenet-stream:library'
   );
@@ -896,20 +896,17 @@ export abstract class UsenetStreamService implements UsenetDebridService {
     const cachedResponse = await UsenetStreamService.resolveCache.get(cacheKey);
 
     if (cachedResponse) {
-      this.serviceLogger.debug(
-        `Using cached response for ${nzb}: ${typeof cachedResponse === 'string' ? 'stream URL' : 'error'}`
+      this.serviceLogger.debug(`Using cached stream URL for ${nzb}`);
+      return cachedResponse;
+    }
+
+    // Check global failure cache
+    if (nzb) {
+      await DebridFailureCache.check(
+        this.serviceName,
+        'usenet',
+        hashNzbUrl(nzb, false)
       );
-      if (typeof cachedResponse === 'string') {
-        return cachedResponse;
-      }
-      throw new DebridError(cachedResponse.message, {
-        statusCode: 400,
-        statusText: 'Bad Request',
-        code: cachedResponse.code,
-        headers: {},
-        body: null,
-        type: 'api_error',
-      });
     }
 
     this.serviceLogger.debug(`Resolving NZB`, {
@@ -988,15 +985,12 @@ export abstract class UsenetStreamService implements UsenetDebridService {
         if (!(error instanceof DebridError)) {
           throw error;
         }
-        UsenetStreamService.resolveCache.set(
-          cacheKey,
-          {
-            message: error.message,
-            code: error.code,
-          },
-          Env.BUILTIN_DEBRID_RESOLVE_ERROR_CACHE_TTL,
-          true
-        );
+        DebridFailureCache.mark(
+          this.serviceName,
+          'usenet',
+          hashNzbUrl(nzb, false),
+          error
+        ).catch(() => {});
         throw error;
       }
 

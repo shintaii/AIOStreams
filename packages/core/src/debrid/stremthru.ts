@@ -8,7 +8,7 @@ import {
   DistributedLock,
   getTimeTakenSincePoint,
 } from '../utils/index.js';
-import { selectFileInTorrentOrNZB, Torrent } from './utils.js';
+import { selectFileInTorrentOrNZB, Torrent, hashNzbUrl } from './utils.js';
 import {
   DebridServiceConfig,
   DebridDownload,
@@ -16,6 +16,7 @@ import {
   DebridError,
   TorrentDebridService,
   UsenetDebridService,
+  DebridFailureCache,
 } from './base.js';
 import { parseTorrentTitle, ParsedResult } from '@viren070/parse-torrent-title';
 import assert from 'assert';
@@ -855,6 +856,9 @@ export class StremThruService
       }
     }
 
+    // Check global failure cache before making any service calls
+    await DebridFailureCache.check(this.serviceName, 'torrent', hash);
+
     let magnetDownload: DebridDownload;
     if (playbackInfo.serviceItemId) {
       logger.debug(`Resolving library torrent item by serviceItemId`, {
@@ -923,7 +927,7 @@ export class StremThruService
             break;
           }
           if (['failed', 'invalid'].includes(magnetDownloadInList.status)) {
-            throw new DebridError(
+            const err = new DebridError(
               `Magnet download ${magnetDownloadInList.status}`,
               {
                 statusCode: 400,
@@ -933,6 +937,13 @@ export class StremThruService
                 body: magnetDownloadInList,
               }
             );
+            DebridFailureCache.mark(
+              this.serviceName,
+              'torrent',
+              hash,
+              err
+            ).catch(() => {});
+            throw err;
           }
         }
       }
@@ -1073,6 +1084,15 @@ export class StremThruService
       }
     }
 
+    // Check global failure cache before making any service calls
+    if (nzb) {
+      await DebridFailureCache.check(
+        this.serviceName,
+        'usenet',
+        hashNzbUrl(nzb, false)
+      );
+    }
+
     let usenetDownload: DebridDownload;
 
     if (!nzb) {
@@ -1141,13 +1161,24 @@ export class StremThruService
           break;
         }
         if (['failed', 'invalid'].includes(polledDownload.status)) {
-          throw new DebridError(`Usenet download ${polledDownload.status}`, {
-            statusCode: 400,
-            statusText: `Usenet download ${polledDownload.status}`,
-            code: 'UNKNOWN',
-            headers: {},
-            body: polledDownload,
-          });
+          const err = new DebridError(
+            `Usenet download ${polledDownload.status}`,
+            {
+              statusCode: 400,
+              statusText: `Usenet download ${polledDownload.status}`,
+              code: 'UNKNOWN',
+              headers: {},
+              body: polledDownload,
+            }
+          );
+          if (nzb)
+            DebridFailureCache.mark(
+              this.serviceName,
+              'usenet',
+              hashNzbUrl(nzb, false),
+              err
+            ).catch(() => {});
+          throw err;
         }
       }
       if (usenetDownload.status !== 'downloaded') {

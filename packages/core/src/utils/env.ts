@@ -19,6 +19,7 @@ import { randomBytes } from 'crypto';
 import fs from 'fs';
 import bytes from 'bytes';
 import UserAgent from 'user-agents';
+import { parseTime } from './time.js';
 
 // Get __dirname equivalent in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -65,6 +66,19 @@ const commaSeparated = makeExactValidator<string[]>((x) => {
   }
   return parsed;
 });
+
+const time = (unit: 's' | 'ms' = 'ms') =>
+  makeValidator<number>((input: string) => {
+    if (/^\-?\d+$/.test(input.trim())) {
+      const value = Number(input.trim());
+      return value;
+    }
+    const ms = parseTime(input);
+    if (ms === null) {
+      throw new EnvError(`Invalid time input: "${input}"`);
+    }
+    return unit === 's' ? Math.floor(ms / 1000) : ms;
+  });
 
 // comma separated list of key:url where key is in choices
 const httpProxyMap = <T extends string>(choices: readonly T[]) =>
@@ -1975,9 +1989,9 @@ export const Env = cleanEnv(process.env, {
     default: 60 * 60, // 1 hour
     desc: 'Builtin Debrid playback link cache TTL',
   }),
-  BUILTIN_DEBRID_RESOLVE_ERROR_CACHE_TTL: num({
-    default: 60 * 10, // 10 minutes
-    desc: 'Builtin Debrid resolve error cache TTL',
+  BUILTIN_DEBRID_ERROR_CACHE_TTL: time('s')({
+    default: 1 * 60 * 60, // 1 hour
+    desc: 'How long globally confirmed content-level failures (e.g. NZB or torrent download status = failed/invalid) are cached to prevent redundant retries across all users.',
   }),
   BUILTIN_DEBRID_LIBRARY_CACHE_TTL: num({
     default: 60 * 60 * 24 * 7, // 7 days
