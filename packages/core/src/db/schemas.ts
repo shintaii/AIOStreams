@@ -208,8 +208,8 @@ const DeduplicatorOptions = z.object({
 
 const OptionDefinition = z.looseObject({
   id: z.string().min(1),
-  name: z.string().min(1),
-  description: z.string().min(1),
+  name: z.string(),
+  description: z.string(),
   showInSimpleMode: z.boolean().optional(),
   advanced: z.boolean().optional(),
   emptyIsUndefined: z.boolean().optional(),
