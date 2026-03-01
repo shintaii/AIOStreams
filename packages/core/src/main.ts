@@ -212,7 +212,17 @@ export class AIOStreams {
       }))
     );
 
-    const processResults = await this._processStreams(streams, context);
+    const processResults = await this._processStreams(
+      streams,
+      context,
+      false,
+      this.userData.nzbFailover?.enabled && !preCaching
+        ? {
+            count: this.userData.nzbFailover.count ?? 3,
+            position: this.userData.nzbFailover.position ?? 'last',
+          }
+        : undefined
+    );
     let finalStreams = processResults.streams;
     errors.push(...processResults.errors);
 
@@ -243,18 +253,6 @@ export class AIOStreams {
           });
         });
       }
-    }
-
-    if (this.userData.nzbFailover?.enabled && !preCaching) {
-      await populateNzbFallbacks(
-        finalStreams,
-        this.userData.nzbFailover?.count ?? 3,
-        this.userData.uuid
-      ).catch((error) => {
-        logger.error('Error during NZB failover population:', {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
     }
 
     // preload selected streams
@@ -2289,7 +2287,11 @@ export class AIOStreams {
   private async _processStreams(
     streams: ParsedStream[],
     context: StreamContext,
-    isMeta: boolean = false
+    isMeta: boolean = false,
+    nzbFailoverOpts?: {
+      count: number;
+      position: 'beforeLimiting' | 'beforeSEL' | 'last';
+    }
   ): Promise<{ streams: ParsedStream[]; errors: AIOStreamsError[] }> {
     const { type, id, queryType } = context;
     let processedStreams = streams;
@@ -2340,12 +2342,55 @@ export class AIOStreams {
       );
     }
 
-    let finalStreams = await this.filterer.applyStreamExpressionFilters(
-      await this.limiter.limit(
-        await this.sorter.sort(processedStreams, context)
-      ),
+    let finalStreams = await this.sorter.sort(processedStreams, context);
+
+    // NZB failover: beforeLimiting position - widest pool (after sort, before limit+SEL)
+    if (nzbFailoverOpts?.position === 'beforeLimiting') {
+      await populateNzbFallbacks(
+        finalStreams,
+        nzbFailoverOpts.count,
+        this.userData.uuid
+      ).catch((error) => {
+        logger.error('Error during NZB failover population (beforeLimiting):', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
+    finalStreams = await this.limiter.limit(finalStreams);
+
+    // NZB failover: beforeSEL position - after limiting, before SEL expression filters
+    if (nzbFailoverOpts?.position === 'beforeSEL') {
+      await populateNzbFallbacks(
+        finalStreams,
+        nzbFailoverOpts.count,
+        this.userData.uuid
+      ).catch((error) => {
+        logger.error('Error during NZB failover population (beforeSEL):', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
+    finalStreams = await this.filterer.applyStreamExpressionFilters(
+      finalStreams,
       context
     );
+
+    // NZB failover: last position (default) - after limiting and SEL, cleanest pool
+    if (!nzbFailoverOpts?.position || nzbFailoverOpts.position === 'last') {
+      if (nzbFailoverOpts) {
+        await populateNzbFallbacks(
+          finalStreams,
+          nzbFailoverOpts.count,
+          this.userData.uuid
+        ).catch((error) => {
+          logger.error('Error during NZB failover population (last):', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    }
 
     this.filterer.generateFilterSummary(streams, finalStreams, type, id);
 

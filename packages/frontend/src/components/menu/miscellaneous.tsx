@@ -510,6 +510,35 @@ function Content() {
                 }));
               }}
             />
+            <Select
+              label="Failover Position"
+              disabled={!userData.nzbFailover?.enabled}
+              help="Where in the processing pipeline the fallback list is built. All positions are after sorting. Earlier positions draw from a larger pool of streams but may include streams that would later be removed by limits or SEL filters."
+              options={[
+                {
+                  label: 'Before Limiting',
+                  value: 'beforeLimiting',
+                },
+                {
+                  label: 'Before SEL',
+                  value: 'beforeSEL',
+                },
+                {
+                  label: 'Last (default)',
+                  value: 'last',
+                },
+              ]}
+              value={userData.nzbFailover?.position ?? 'last'}
+              onValueChange={(value) => {
+                setUserData((prev) => ({
+                  ...prev,
+                  nzbFailover: {
+                    ...prev.nzbFailover,
+                    position: value as 'beforeLimiting' | 'beforeSEL' | 'last',
+                  },
+                }));
+              }}
+            />
           </SettingsCard>
         )}
         {mode === 'pro' && (

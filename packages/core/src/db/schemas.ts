@@ -675,6 +675,7 @@ export const UserDataSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       count: z.number().min(1).max(10).optional(),
+      position: z.enum(['beforeLimiting', 'beforeSEL', 'last']).optional(),
     })
     .optional(),
   serviceWrap: z
