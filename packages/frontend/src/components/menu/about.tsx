@@ -195,6 +195,8 @@ AIOStreams consolidates multiple Stremio addons and debrid services - including 
   `;
   const addonDescription = userData.addonDescription || defaultDescription;
   const version = status?.tag || 'Unknown';
+  const channel: 'stable' | 'nightly' | 'dev' =
+    status?.channel ?? (version.startsWith('v') ? 'stable' : 'nightly');
   const githubUrl = 'https://github.com/Viren070/AIOStreams';
   const releasesUrl = 'https://github.com/Viren070/AIOStreams/releases';
   const stremioGuideUrl = 'https://guides.viren070.me/stremio/';
@@ -307,8 +309,7 @@ AIOStreams consolidates multiple Stremio addons and debrid services - including 
               </div>
               <span className="text-xl md:text-2xl font-semibold text-gray-400 md:mb-1">
                 {version}{' '}
-                {/* {version.includes('nightly') ? `(${status?.commit})` : ''} */}
-                {version.includes('nightly') ? (
+                {channel === 'nightly' || channel === 'dev' ? (
                   <a
                     href={`https://github.com/Viren070/AIOStreams/commit/${status?.commit}`}
                     target="_blank"
@@ -486,7 +487,7 @@ AIOStreams consolidates multiple Stremio addons and debrid services - including 
           </div>
         </div>
 
-        <ChangelogBox version={version} />
+        <ChangelogBox version={version} channel={channel} />
 
         <div className="flex flex-col items-center mt-4">
           <div className="flex flex-col items-center gap-0.5 mt-4 text-xs text-gray-500">
@@ -577,7 +578,13 @@ AIOStreams consolidates multiple Stremio addons and debrid services - including 
   );
 }
 
-function ChangelogBox({ version }: { version: string }) {
+function ChangelogBox({
+  version,
+  channel,
+}: {
+  version: string;
+  channel: 'stable' | 'nightly' | 'dev';
+}) {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [allReleases, setAllReleases] = React.useState<any[]>([]);
@@ -591,10 +598,20 @@ function ChangelogBox({ version }: { version: string }) {
   const [showLoadMoreOverlay, setShowLoadMoreOverlay] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
 
-  // Determine channel from version
-  const currentChannel = React.useMemo(() => {
-    return version.startsWith('v') ? 'stable' : 'nightly';
-  }, [version]);
+  // For dev builds, skip the entire changelog / update-check UI
+  if (channel === 'dev') {
+    return (
+      <GlowCard className="p-4">
+        <p className="text-sm text-gray-400">
+          This is a dev/PR build (
+          <span className="font-mono text-gray-300">{version}</span>). Changelog
+          and update checks are not available.
+        </p>
+      </GlowCard>
+    );
+  }
+
+  const currentChannel = channel;
 
   // Version comparison function
   const compareVersions = React.useCallback(

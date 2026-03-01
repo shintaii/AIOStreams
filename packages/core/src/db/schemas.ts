@@ -1207,6 +1207,7 @@ const PresetMetadataSchema = PresetMinimalMetadataSchema.extend({
 const StatusResponseSchema = z.object({
   version: z.string(),
   tag: z.string(),
+  channel: z.enum(['stable', 'nightly', 'dev']),
   commit: z.string(),
   buildTime: z.string(),
   commitTime: z.string(),

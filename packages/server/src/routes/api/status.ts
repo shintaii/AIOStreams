@@ -29,6 +29,7 @@ const statusInfo = async (): Promise<StatusResponse> => {
   return {
     version: Env.VERSION,
     tag: Env.TAG,
+    channel: Env.CHANNEL as 'stable' | 'nightly' | 'dev',
     commit: Env.GIT_COMMIT,
     buildTime: Env.BUILD_TIME,
     commitTime: Env.BUILD_COMMIT_TIME,

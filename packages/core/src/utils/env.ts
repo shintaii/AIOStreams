@@ -479,6 +479,11 @@ export const Env = cleanEnv(process.env, {
     default: metadata?.tag || 'unknown',
     desc: 'Tag of the addon',
   }),
+  CHANNEL: readonly({
+    default: (metadata?.channel as 'stable' | 'nightly' | 'dev') || 'stable',
+    choices: ['stable', 'nightly', 'dev'],
+    desc: 'Build channel of the addon',
+  }),
   DESCRIPTION: readonly({
     default: metadata?.description || 'unknown',
     desc: 'Description of the addon',
