@@ -26,6 +26,7 @@ import {
   getVisibleOptions,
 } from '@/lib/templates/processors';
 import { UseValidationModal } from './validationModal';
+import { Mode } from '@/context/mode';
 
 export interface UseTemplateWizardParams {
   status: StatusResponse | null;
@@ -35,7 +36,7 @@ export interface UseTemplateWizardParams {
   templateValidations: Record<string, TemplateValidation>;
   setSelectedMenu: (menu: string) => void;
   onOpenChange: (open: boolean) => void;
-  mode: string;
+  mode: Mode;
 }
 
 export interface UseTemplateWizard {
