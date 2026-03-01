@@ -329,7 +329,7 @@ export const getVisibleOptions = (
     if (opt.subOptions) {
       cloned.subOptions = getVisibleOptions(
         mode,
-        opt.subOptions,
+        opt.subOptions as Option[],
         values,
         selectedServices
       );
