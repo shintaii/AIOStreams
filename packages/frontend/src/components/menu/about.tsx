@@ -205,6 +205,8 @@ AIOStreams consolidates multiple Stremio addons and debrid services - including 
   const signInModal = useDisclosure(false);
   const templatesModal = useDisclosure(false);
   const setupChoiceModal = useDisclosure(false);
+  const [featuredTemplateToOpen, setFeaturedTemplateToOpen] =
+    React.useState<Template | null>(null);
   const customHtml = status?.settings?.customHtml;
   const pathname = usePathname();
   const [deepLinkUrl, setDeepLinkUrl] = React.useState<string | undefined>(
@@ -367,7 +369,10 @@ AIOStreams consolidates multiple Stremio addons and debrid services - including 
                     <TemplateMiniCard
                       key={template.metadata.id}
                       template={template}
-                      onOpen={templatesModal.open}
+                      onOpen={() => {
+                        setFeaturedTemplateToOpen(template);
+                        templatesModal.open();
+                      }}
                     />
                   ))}
                 </div>
@@ -533,9 +538,16 @@ AIOStreams consolidates multiple Stremio addons and debrid services - including 
       <ConfirmationDialog {...confirmClearConfig} />
       <ConfigTemplatesModal
         open={templatesModal.isOpen}
-        onOpenChange={templatesModal.toggle}
+        onOpenChange={(v) => {
+          if (v) templatesModal.open();
+          else {
+            templatesModal.close();
+            setFeaturedTemplateToOpen(null);
+          }
+        }}
         deepLinkUrl={deepLinkUrl}
         deepLinkTemplateId={deepLinkTemplateId}
+        initialExpandedTemplateId={featuredTemplateToOpen?.metadata.id}
       />
       <SetupChoiceModal
         open={setupChoiceModal.isOpen}

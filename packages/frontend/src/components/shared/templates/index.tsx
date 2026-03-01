@@ -29,6 +29,7 @@ export function ConfigTemplatesModal({
   openImportModal = false,
   deepLinkUrl,
   deepLinkTemplateId,
+  initialExpandedTemplateId,
 }: ConfigTemplatesModalProps) {
   const { setUserData, userData } = useUserData();
   const { status } = useStatus();
@@ -187,6 +188,13 @@ export function ConfigTemplatesModal({
               importer.confirmDeleteTemplate.open();
             }}
             totalTemplateCount={loader.templates.length}
+            initialExpandedTemplate={
+              initialExpandedTemplateId
+                ? (loader.templates.find(
+                    (t) => t.metadata.id === initialExpandedTemplateId
+                  ) ?? undefined)
+                : undefined
+            }
           />
         </div>
       </Modal>

@@ -86,6 +86,8 @@ export interface ConfigTemplatesModalProps {
   deepLinkUrl?: string;
   /** If set alongside deepLinkUrl, auto-selects the template with this ID from the fetched list. */
   deepLinkTemplateId?: string;
+  /** If set, the browse step will open with the description modal for this template ID pre-expanded. */
+  initialExpandedTemplateId?: string;
 }
 
 export const TEMPLATE_CACHE = new Map<string, Template[]>();

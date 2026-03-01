@@ -37,6 +37,7 @@ interface TemplateBrowseStepProps {
   onImportOpen: () => void;
   onDeleteRequest: (t: Template) => void;
   totalTemplateCount: number;
+  initialExpandedTemplate?: Template;
 }
 
 interface TemplateCardProps {
@@ -289,10 +290,20 @@ export function TemplateBrowseStep({
   onImportOpen,
   onDeleteRequest,
   totalTemplateCount,
+  initialExpandedTemplate,
 }: TemplateBrowseStepProps) {
   const [expandedTemplate, setExpandedTemplate] = useState<Template | null>(
     null
   );
+
+  // Pre-open the description modal when an initialExpandedTemplate is provided.
+  // Run when the template ID changes (new card clicked) or when it first resolves
+  // from the loader (templates load async).
+  useEffect(() => {
+    if (initialExpandedTemplate) {
+      setExpandedTemplate(initialExpandedTemplate);
+    }
+  }, [initialExpandedTemplate?.metadata.id]);
 
   return (
     <>
