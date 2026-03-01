@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { asConfigArray, evaluateTemplateCondition } from './conditionals';
 import * as constants from '@aiostreams/core/src/utils/constants';
 import { ProcessedTemplate, TemplateInput } from '../types';
+import { Mode } from '@/context/mode';
 
 /** Detect if a value is a placeholder string in the template. */
 export const parsePlaceholder = (
@@ -299,18 +300,41 @@ export const applyInputValue = (obj: any, path: string, value: any): void => {
  * respecting the current mode (noob hides advanced options) and __if conditions.
  */
 export const getVisibleOptions = (
-  mode: string,
+  mode: Mode,
   options: Option[],
   values: Record<string, any>,
   selectedServices: string[]
 ): Option[] =>
-  (mode === 'noob'
-    ? options.filter(
-        (opt) => opt.advanced !== true && opt.showInSimpleMode !== false
-      )
-    : options
-  ).filter((opt) =>
-    (opt as any).__if
-      ? evaluateTemplateCondition((opt as any).__if, values, selectedServices)
-      : true
-  );
+  options.reduce<Option[]>((acc, opt) => {
+    if (
+      mode === 'noob' &&
+      (opt.advanced === true || opt.showInSimpleMode === false)
+    ) {
+      return acc;
+    }
+
+    if (opt.__if && typeof opt.__if === 'string') {
+      const visible = evaluateTemplateCondition(
+        opt.__if,
+        values,
+        selectedServices
+      );
+      if (!visible) {
+        return acc;
+      }
+    }
+
+    const cloned: Option = { ...opt };
+
+    if (opt.subOptions) {
+      cloned.subOptions = getVisibleOptions(
+        mode,
+        opt.subOptions,
+        values,
+        selectedServices
+      );
+    }
+
+    acc.push(cloned);
+    return acc;
+  }, []);
