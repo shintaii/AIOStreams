@@ -99,6 +99,7 @@ const TemplateOption: React.FC<TemplateOptionProps> = ({
             }
             required={required}
             disabled={isDisabled}
+            autoComplete="off"
             minLength={
               constraints?.forceInUi !== false ? constraints?.min : undefined
             }
