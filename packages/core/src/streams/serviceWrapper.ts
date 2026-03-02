@@ -104,7 +104,7 @@ export async function resolveServiceWrappedStreams(
       wrappedP2PStreams.push(stream);
     } else if (
       reconfigureEnabled &&
-      presetMeta?.BUILTIN == false &&
+      !presetMeta?.BUILTIN &&
       !isWrapped &&
       stream.type === 'debrid' &&
       stream.torrent?.infoHash &&
