@@ -15,8 +15,6 @@ import {
   Cache,
   ExtrasParser,
   makeUrlLogSafe,
-  AnimeDatabase,
-  ParsedId,
   IdParser,
 } from './utils/index.js';
 import { Wrapper } from './wrapper.js';
@@ -32,8 +30,7 @@ import {
   Subtitle,
 } from './db/schemas.js';
 import { createProxy } from './proxy/index.js';
-import { TopPoster } from './utils/top-poster.js';
-import { RPDB } from './utils/rpdb.js';
+import { createPosterService } from './poster/index.js';
 import { FeatureControl } from './utils/feature.js';
 import Proxifier from './streams/proxifier.js';
 import StreamLimiter from './streams/limiter.js';
@@ -44,10 +41,15 @@ import {
   StreamDeduplicator as Deduplicator,
   StreamPrecomputer as Precomputer,
   StreamUtils,
+  StreamContext,
+  populateNzbFallbacks,
+  preloadStreams,
 } from './streams/index.js';
+import { resolveServiceWrappedStreams } from './streams/serviceWrapper.js';
 import { getAddonName } from './utils/general.js';
-import { TMDBMetadata } from './metadata/tmdb.js';
 import { Metadata } from './metadata/utils.js';
+import { StreamSelector } from './parser/streamExpression.js';
+
 const logger = createLogger('core');
 
 const shuffleCache = Cache.getInstance<string, MetaPreview[]>('shuffle');
@@ -62,7 +64,7 @@ const mergedCatalogCache = Cache.getInstance<string, MergedCatalogSkipState>(
 const precacheCache = Cache.getInstance<string, boolean>(
   'precache',
   undefined,
-  'memory'
+  Env.REDIS_URI ? 'redis' : 'memory'
 );
 
 export interface AIOStreamsError {
@@ -100,6 +102,7 @@ export class AIOStreams {
   private deduplicator: Deduplicator;
   private sorter: Sorter;
   private precomputer: Precomputer;
+  private streamContext: StreamContext | null = null;
 
   private addonInitialisationErrors: {
     addon: Addon | Preset;
@@ -184,11 +187,15 @@ export class AIOStreams {
       }
     );
 
+    const context = StreamContext.create(type, id, this.userData);
+    // Store context for later retrieval
+    this.streamContext = context;
+
     const {
       streams,
       errors,
       statistics: addonStatistics,
-    } = await this.fetcher.fetch(supportedAddons, type, id);
+    } = await this.fetcher.fetch(supportedAddons, context);
 
     if (
       this.userData.statistics?.enabled &&
@@ -205,7 +212,17 @@ export class AIOStreams {
       }))
     );
 
-    const processResults = await this._processStreams(streams, type, id);
+    const processResults = await this._processStreams(
+      streams,
+      context,
+      false,
+      this.userData.nzbFailover?.enabled && !preCaching
+        ? {
+            count: this.userData.nzbFailover.count ?? 3,
+            position: this.userData.nzbFailover.position ?? 'last',
+          }
+        : undefined
+    );
     let finalStreams = processResults.streams;
     errors.push(...processResults.errors);
 
@@ -227,7 +244,7 @@ export class AIOStreams {
       }
       if (precache) {
         setImmediate(() => {
-          this.precacheNextEpisode(type, id).catch((error) => {
+          this.precacheNextEpisode(context).catch((error) => {
             logger.error('Error during precaching:', {
               error: error instanceof Error ? error.message : String(error),
               type,
@@ -235,6 +252,68 @@ export class AIOStreams {
             });
           });
         });
+      }
+    }
+
+    // preload selected streams
+    if (this.userData.preloadStreams?.enabled && !preCaching) {
+      // Skip if the same user has already triggered a preload for this item recently
+      let shouldPreload = true;
+      if (Env.PRELOAD_MIN_INTERVAL > 0) {
+        const preloadCooldownKey = `preload-${type}-${id}-${this.userData.uuid}`;
+        const recentlyPreloaded = await precacheCache.get(
+          preloadCooldownKey,
+          false
+        );
+        if (recentlyPreloaded) {
+          logger.info(
+            `Preload for ${type} ${id} skipped — within cooldown (${precacheCache.getTTL(preloadCooldownKey)} seconds left).`
+          );
+          shouldPreload = false;
+        } else {
+          await precacheCache.set(
+            preloadCooldownKey,
+            true,
+            Env.PRELOAD_MIN_INTERVAL
+          );
+        }
+      }
+
+      if (shouldPreload) {
+        const preloadSelector =
+          this.userData.preloadStreams.selector ??
+          constants.DEFAULT_PRELOAD_SELECTOR;
+        const streamSelector = new StreamSelector(
+          context.toExpressionContext()
+        );
+        let streamsToPreload: ParsedStream[];
+        try {
+          streamsToPreload = (
+            await streamSelector.select(finalStreams, preloadSelector)
+          )
+            .filter((s) => s.url)
+            .slice(0, Env.MAX_BACKGROUND_PINGS);
+        } catch (selectorError) {
+          logger.warn('Preload selector evaluation failed', {
+            selector: preloadSelector,
+            error:
+              selectorError instanceof Error
+                ? selectorError.message
+                : String(selectorError),
+          });
+          streamsToPreload = [];
+        }
+        if (streamsToPreload.length > 0) {
+          setImmediate(() => {
+            preloadStreams(streamsToPreload).catch((error) => {
+              logger.error('Error during stream preloading:', {
+                error: error instanceof Error ? error.message : String(error),
+                type,
+                id,
+              });
+            });
+          });
+        }
       }
     }
 
@@ -300,6 +379,17 @@ export class AIOStreams {
   }
 
   /**
+   * Get the stream context created during the last getStreams call.
+   * This provides access to metadata and other contextual information.
+   * The context can be used to create a FormatterContext with streams data.
+   *
+   * @returns The StreamContext or null if getStreams hasn't been called yet
+   */
+  public getStreamContext(): StreamContext | null {
+    return this.streamContext;
+  }
+
+  /**
    * Fetches raw catalog items from a specific addon without applying any modifications.
    * Returns the raw items from the upstream addon.
    */
@@ -314,7 +404,21 @@ export class AIOStreams {
     error?: { title: string; description: string };
   }> {
     const addon = this.getAddon(addonInstanceId);
+
     if (!addon) {
+      const initError = (
+        this.addonInitialisationErrors as { addon: Preset; error: string }[]
+      ).find((e) => addonInstanceId.startsWith(e.addon.instanceId || ''));
+      if (initError) {
+        return {
+          success: false,
+          items: [],
+          error: {
+            title: `[❌] ${initError.error}`,
+            description: `Addon ${addonInstanceId} failed to initialise. Try reinstalling/disabling/uninstalling the addon.`,
+          },
+        };
+      }
       return {
         success: false,
         items: [],
@@ -434,9 +538,24 @@ export class AIOStreams {
       (mod) =>
         mod.id === catalogId && (mod.type === type || mod.overrideType === type)
     );
+    const applyShuffle = modification?.shuffle && !isSearch && shuffleCacheKey;
+    const applyReverse = !applyShuffle && modification?.reverse && !isSearch;
+
+    logger.debug(`Applying catalog modifications`, {
+      catalogId,
+      type,
+      modificationFound: !!modification,
+      posterService:
+        modification?.usePosterService === true &&
+        this.userData.posterService !== 'none'
+          ? this.userData.posterService
+          : false,
+      shuffle: !!applyShuffle,
+      reverse: !!applyReverse,
+    });
 
     // Apply shuffle if enabled (not for search requests)
-    if (modification?.shuffle && !isSearch && shuffleCacheKey) {
+    if (applyShuffle) {
       // const actualCatalogId = catalogId.split('.').slice(1).join('.');
       // // Use extras as part of cache key so different extras get different shuffle
       // const cacheKey = `${type}-${actualCatalogId}-${parsedExtras?.toString() || ''}-${this.userData.uuid}`;
@@ -456,7 +575,7 @@ export class AIOStreams {
           );
         }
       }
-    } else if (modification?.reverse && !isSearch) {
+    } else if (applyReverse) {
       catalog = catalog.reverse();
     }
 
@@ -922,44 +1041,20 @@ export class AIOStreams {
     type: string,
     applyPosterService: boolean = true
   ): Promise<MetaPreview[]> {
-    const posterService = applyPosterService
-      ? this.userData.posterService ||
-        (this.userData.rpdbApiKey ? 'rpdb' : undefined)
-      : undefined;
-    const posterApiKey =
-      posterService === 'rpdb'
-        ? this.userData.rpdbApiKey
-        : posterService === 'top-poster'
-          ? this.userData.topPosterApiKey
-          : undefined;
-    const posterApi = posterApiKey
-      ? posterService === 'rpdb'
-        ? new RPDB(posterApiKey)
-        : posterService === 'top-poster'
-          ? new TopPoster(posterApiKey)
-          : undefined
-      : undefined;
+    const posterApi = applyPosterService
+      ? createPosterService(this.userData)
+      : null;
 
     return Promise.all(
       items.map(async (item) => {
         if (posterApi && item.poster) {
           let posterUrl = item.poster;
-          if (
-            posterUrl.includes('api.ratingposterdb.com') ||
-            posterUrl.includes('api.top-streaming.stream')
-          ) {
-            // already a poster from a poster service, do nothing.
+          if (posterApi.isPosterFromThisService(posterUrl)) {
+            // already a poster from this service, do nothing
           } else if (this.userData.usePosterRedirectApi) {
             const itemId = (item as any).imdb_id || item.id;
-            const url = new URL(Env.BASE_URL);
-            url.pathname =
-              posterService === 'rpdb' ? '/api/v1/rpdb' : '/api/v1/top-poster';
-            url.searchParams.set('id', itemId);
-            url.searchParams.set('type', type);
-            url.searchParams.set('fallback', item.poster);
-            url.searchParams.set('apiKey', posterApiKey!);
-            posterUrl = url.toString();
-          } else if (posterApi) {
+            posterUrl = posterApi.buildRedirectUrl(itemId, type, item.poster);
+          } else {
             const servicePosterUrl = await posterApi.getPosterUrl(
               type,
               (item as any).imdb_id || item.id,
@@ -1117,13 +1212,15 @@ export class AIOStreams {
         }
 
         if (meta.videos) {
+          const context = StreamContext.create(type, id, this.userData);
+          this.streamContext = context;
           meta.videos = await Promise.all(
             meta.videos.map(async (video) => {
               if (!video.streams) {
                 return video;
               }
               video.streams = (
-                await this._processStreams(video.streams, type, id, true)
+                await this._processStreams(video.streams, context, true)
               ).streams;
               return video;
             })
@@ -1299,14 +1396,58 @@ export class AIOStreams {
       return;
     }
 
+    const serviceWrap = this.userData.serviceWrap;
+
     for (const preset of this.userData.presets.filter((p) => p.enabled)) {
       try {
-        const addons = await PresetManager.fromId(preset.type).generateAddons(
-          this.userData,
+        const Preset = PresetManager.fromId(preset.type);
+        if (Preset.METADATA.DISABLED) {
+          throw new Error(
+            `${Preset.METADATA.NAME} has been ${Preset.METADATA.DISABLED.removed ? 'removed' : 'disabled'}: ${Preset.METADATA.DISABLED.reason}`
+          );
+        }
+
+        // Determine if P2P wrap applies to this preset
+        const shouldServiceWrap =
+          serviceWrap?.enabled &&
+          Preset.METADATA.SUPPORTED_STREAM_TYPES.includes(
+            constants.P2P_STREAM_TYPE
+          ) &&
+          !Preset.METADATA.BUILTIN &&
+          (!serviceWrap.presets ||
+            serviceWrap.presets.length === 0 ||
+            serviceWrap.presets.includes(preset.instanceId));
+
+        // When Service Wrap is active, only generate normal addons for services
+        // that are NOT builtin-supported (since builtin services will be handled
+        // by resolveServiceWrappedStreams through the service-wrapped addon).
+        // This avoids redundant debrid addons.
+        const normalUserData = shouldServiceWrap
+          ? {
+              ...this.userData,
+              services: (this.userData.services ?? []).filter(
+                (s) =>
+                  !(
+                    constants.BUILTIN_SUPPORTED_SERVICES as readonly string[]
+                  ).includes(s.id)
+              ),
+            }
+          : this.userData;
+
+        const addons = await Preset.generateAddons(
+          normalUserData,
           preset.options
         );
+
+        // When service wrapping, don't add addons that fell into P2P mode
+        // due to having no usable services — those would be unmarked duplicates
+        // of the serviceWrapped addon we generate below.
+        const filteredAddons = shouldServiceWrap
+          ? addons.filter((a) => a.identifier !== 'p2p')
+          : addons;
+
         this.addons.push(
-          ...addons.map(
+          ...filteredAddons.map(
             (a): Addon => ({
               ...a,
               preset: {
@@ -1319,6 +1460,43 @@ export class AIOStreams {
             })
           )
         );
+
+        // Service Wrap: generate the P2P-mode addon for this preset
+        // so its torrent results can be resolved through builtin debrid services
+        if (shouldServiceWrap) {
+          try {
+            // Generate addons with no services, forcing the preset into P2P mode
+            const p2pUserData: UserData = {
+              ...this.userData,
+              services: [], // empty services → preset falls into P2P codepath
+            };
+            const p2pAddons = await Preset.generateAddons(
+              p2pUserData,
+              preset.options
+            );
+            // Only keep addons that are actually P2P (not debrid addons from presets that don't care about services)
+            this.addons.push(
+              ...p2pAddons.map(
+                (a): Addon => ({
+                  ...a,
+                  preset: {
+                    ...a.preset,
+                    id: preset.instanceId,
+                  },
+                  instanceId: `${preset.instanceId}${getSimpleTextHash(`servicewrap-${a.identifier ?? ''}`).slice(0, 4)}`,
+                  serviceWrapped: true,
+                })
+              )
+            );
+            logger.info(
+              `Service Wrap: generated ${p2pAddons.length} P2P-mode addon(s) for preset ${Preset.METADATA.NAME}`
+            );
+          } catch (error) {
+            logger.warn(
+              `Service Wrap: failed to generate P2P addons for ${Preset.METADATA.NAME}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
       } catch (error) {
         if (this.options?.skipFailedAddons !== false) {
           this.addonInitialisationErrors.push({
@@ -2075,24 +2253,6 @@ export class AIOStreams {
     });
   }
 
-  private async getMetadata(parsedId: ParsedId): Promise<Metadata | undefined> {
-    try {
-      const metadata = await new TMDBMetadata({
-        accessToken: this.userData.tmdbAccessToken,
-        apiKey: this.userData.tmdbApiKey,
-      }).getMetadata(parsedId);
-      return metadata;
-    } catch (error) {
-      logger.warn(
-        `Error getting metadata for ${parsedId.fullId}, will not be able to precache next season if necessary`,
-        {
-          error: error instanceof Error ? error.message : String(error),
-        }
-      );
-      return undefined;
-    }
-  }
-
   private _getNextEpisode(
     currentSeason: number | undefined,
     currentEpisode: number,
@@ -2126,36 +2286,113 @@ export class AIOStreams {
 
   private async _processStreams(
     streams: ParsedStream[],
-    type: string,
-    id: string,
-    isMeta: boolean = false
+    context: StreamContext,
+    isMeta: boolean = false,
+    nzbFailoverOpts?: {
+      count: number;
+      position: 'beforeLimiting' | 'beforeSEL' | 'last';
+    }
   ): Promise<{ streams: ParsedStream[]; errors: AIOStreamsError[] }> {
+    const { type, id, queryType } = context;
     let processedStreams = streams;
     let errors: AIOStreamsError[] = [];
 
     if (isMeta) {
       // Run SeaDex precompute before filter so seadex() works in Included SEL
-      await this.precomputer.precomputeSeaDexOnly(processedStreams, id);
-      processedStreams = await this.filterer.filter(processedStreams, type, id);
+      await this.precomputer.precomputeSeaDexOnly(processedStreams, context);
+      processedStreams = await this.filterer.filter(processedStreams, context);
+    }
+
+    // Resolve service-wrapped P2P streams through debrid services.
+    // This runs after the initial filter pass (which lets P2P streams through
+    // when serviceWrap is enabled) so that the streams can be converted to debrid.
+    // Capture existing stream IDs before service wrapping so we can skip
+    // per-stream precomputation for streams already precomputed in the fetcher.
+    const preServiceWrapIds = new Set(processedStreams.map((s) => s.id));
+    const resolvedResults = await resolveServiceWrappedStreams(
+      processedStreams,
+      context,
+      this.userData,
+      this.addons
+    );
+    processedStreams = resolvedResults.streams;
+    errors.push(...resolvedResults.errors);
+
+    // Re-run filters on streams that were just service-wrapped.
+    // They now have debrid-specific info (service, cached status, etc.)
+    // that wasn't available during the first filter pass.
+    if (resolvedResults.hasNewStreams) {
+      processedStreams = await this.filterer.filter(processedStreams, context);
     }
 
     processedStreams = await this.deduplicator.deduplicate(processedStreams);
 
-    if (isMeta) {
-      // Run preferred matching after filter
-      await this.precomputer.precomputePreferred(processedStreams, type, id);
+    if (isMeta || resolvedResults.hasNewStreams) {
+      // When service wrapping added new streams and we're not in meta mode,
+      // existing streams were already precomputed in the fetcher — skip
+      // per-stream regex/keyword ops for them.
+      const skipPerStreamIds =
+        !isMeta && resolvedResults.hasNewStreams
+          ? preServiceWrapIds
+          : undefined;
+      await this.precomputer.precomputePreferred(
+        processedStreams,
+        context,
+        skipPerStreamIds
+      );
     }
 
-    let finalStreams = await this.filterer.applyStreamExpressionFilters(
-      await this.limiter.limit(
-        await this.sorter.sort(
-          processedStreams,
-          AnimeDatabase.getInstance().isAnime(id) ? 'anime' : type
-        )
-      ),
-      type,
-      id
+    let finalStreams = await this.sorter.sort(processedStreams, context);
+
+    // NZB failover: beforeLimiting position - widest pool (after sort, before limit+SEL)
+    if (nzbFailoverOpts?.position === 'beforeLimiting') {
+      await populateNzbFallbacks(
+        finalStreams,
+        nzbFailoverOpts.count,
+        this.userData.uuid
+      ).catch((error) => {
+        logger.error('Error during NZB failover population (beforeLimiting):', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
+    finalStreams = await this.limiter.limit(finalStreams);
+
+    // NZB failover: beforeSEL position - after limiting, before SEL expression filters
+    if (nzbFailoverOpts?.position === 'beforeSEL') {
+      await populateNzbFallbacks(
+        finalStreams,
+        nzbFailoverOpts.count,
+        this.userData.uuid
+      ).catch((error) => {
+        logger.error('Error during NZB failover population (beforeSEL):', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+
+    finalStreams = await this.filterer.applyStreamExpressionFilters(
+      finalStreams,
+      context
     );
+
+    // NZB failover: last position (default) - after limiting and SEL, cleanest pool
+    if (!nzbFailoverOpts?.position || nzbFailoverOpts.position === 'last') {
+      if (nzbFailoverOpts) {
+        await populateNzbFallbacks(
+          finalStreams,
+          nzbFailoverOpts.count,
+          this.userData.uuid
+        ).catch((error) => {
+          logger.error('Error during NZB failover population (last):', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }
+    }
+
+    this.filterer.generateFilterSummary(streams, finalStreams, type, id);
 
     const { streams: proxiedStreams, error } =
       await this.proxifier.proxify(finalStreams);
@@ -2170,6 +2407,9 @@ export class AIOStreams {
       if (stream.parsedFile) {
         stream.parsedFile.visualTags = stream.parsedFile.visualTags.filter(
           (tag) => !constants.FAKE_VISUAL_TAGS.includes(tag as any)
+        );
+        stream.parsedFile.languages = stream.parsedFile.languages.filter(
+          (lang) => !['Original'].includes(lang as any)
         );
       }
       return stream;
@@ -2194,46 +2434,8 @@ export class AIOStreams {
     return { streams: finalStreams, errors };
   }
 
-  private async _fetchAndHandleRedirects(stream: ParsedStream, id: string) {
-    const wrapper = new Wrapper(stream.addon);
-    if (!stream.url) {
-      throw new Error(`Stream URL is undefined`);
-    }
-    const initialResponse = await wrapper.makeRequest(stream.url, {
-      timeout: 30000,
-      rawOptions: { redirect: 'manual' },
-    });
-
-    // If it's a redirect, handle it
-    if (initialResponse.status >= 300 && initialResponse.status < 400) {
-      const redirectUrl = initialResponse.headers.get('Location');
-      if (!redirectUrl) {
-        throw new Error(
-          `Redirect response (${initialResponse.status}) has no Location header.`
-        );
-      }
-
-      const absoluteRedirectUrl = new URL(redirectUrl, stream.url).toString();
-      const originalHost = new URL(stream.url).host;
-      const redirectHost = new URL(absoluteRedirectUrl).host;
-
-      if (redirectHost !== originalHost) {
-        throw new Error(
-          `Host mismatch during redirect: original (${originalHost}) vs redirect (${redirectHost}). Not following.`
-        );
-      }
-
-      logger.debug(
-        `Following same-domain redirect to ${makeUrlLogSafe(absoluteRedirectUrl)} for precaching ${id}`
-      );
-      return wrapper.makeRequest(absoluteRedirectUrl, { timeout: 30000 });
-    }
-
-    return initialResponse;
-  }
-
-  private async precacheNextEpisode(type: string, id: string) {
-    const parsedId = IdParser.parse(id, type);
+  private async precacheNextEpisode(context: StreamContext) {
+    const { type, id, parsedId } = context;
     if (!parsedId) {
       return;
     }
@@ -2246,7 +2448,7 @@ export class AIOStreams {
       return;
     }
 
-    const metadata = await this.getMetadata(parsedId);
+    const metadata = await context.getMetadata();
 
     const { season: seasonToPrecache, episode: episodeToPrecache } =
       this._getNextEpisode(currentSeason, currentEpisode, metadata);
@@ -2268,7 +2470,9 @@ export class AIOStreams {
     // modify userData to remove the excludeUncached filter
     const userData = structuredClone(this.userData);
     userData.excludeUncached = false;
+    // ensure default fetching is used as time does not matter for a background precache
     userData.groups = undefined;
+    userData.dynamicAddonFetching = { enabled: false };
     this.setUserData(userData);
 
     const nextStreamsResponse = await this.getStreams(precacheId, type, true);
@@ -2279,56 +2483,59 @@ export class AIOStreams {
       return;
     }
 
-    const serviceStreams = nextStreamsResponse.data.streams.filter(
-      (stream) => stream.service
-    );
-    const shouldPrecache =
-      serviceStreams.every((stream) => stream.service?.cached === false) ||
-      this.userData.alwaysPrecache;
+    const nextStreams = nextStreamsResponse.data.streams;
 
-    if (!shouldPrecache) {
+    // Evaluate precache selector on the next episode's streams
+    let selectedStreams: ParsedStream[] = [];
+    const selector =
+      this.userData.precacheSelector || constants.DEFAULT_PRECACHE_SELECTOR;
+    try {
+      const streamSelector = new StreamSelector(context.toExpressionContext());
+      selectedStreams = await streamSelector.select(nextStreams, selector);
+      logger.debug(`Precache selector evaluated`, {
+        selector,
+        resultCount: selectedStreams.length,
+      });
+    } catch (error) {
+      logger.error(`Failed to evaluate precache selector`, {
+        selector,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    if (selectedStreams.length === 0) {
       logger.debug(
-        `Skipping precaching ${id} as all streams are cached or Always Precache is disabled`
+        `Skipping precaching ${id} as precache selector returned no streams`
       );
       return;
     }
 
-    const firstUncachedStream = serviceStreams.find(
-      (stream) => stream.service?.cached === false
-    );
-    if (!firstUncachedStream || !firstUncachedStream.url) {
-      logger.debug(
-        `Skipping precaching ${id} as no uncached streams were found or it had no URL`
-      );
+    const singleStreamOnly = this.userData.precacheSingleStream !== false;
+    const streamsToCache = selectedStreams
+      .filter((s) => s.url)
+      .slice(0, singleStreamOnly ? 1 : Env.MAX_BACKGROUND_PINGS);
+
+    if (streamsToCache.length === 0) {
+      logger.debug(`Skipping precaching ${id} as no selected stream had a URL`);
       return;
     }
 
     logger.debug(
-      `Selected following stream for precaching:\n${firstUncachedStream.originalName}\n${firstUncachedStream.originalDescription}`
+      `Precaching ${streamsToCache.length} stream(s) for ${id} (${type})`
     );
 
-    try {
-      const response = await this._fetchAndHandleRedirects(
-        firstUncachedStream,
-        precacheId
-      );
-      logger.debug(`Response: ${response.status} ${response.statusText}`);
-      if (!response.ok) {
-        throw new Error(
-          `Final Response not OK: ${response.status} ${response.statusText}`
-        );
-      }
-      const cacheKey = `precache-${type}-${id}-${this.userData.uuid}`;
-      await precacheCache.set(
-        cacheKey,
-        true,
-        Env.PRECACHE_NEXT_EPISODE_MIN_INTERVAL
-      );
-      logger.info(`Successfully precached a stream for ${id} (${type})`);
-    } catch (error) {
-      logger.error(`Error pinging url of first uncached stream`, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    const cacheKey = `precache-${type}-${id}-${this.userData.uuid}`;
+    await precacheCache.set(
+      cacheKey,
+      true,
+      Env.PRECACHE_NEXT_EPISODE_MIN_INTERVAL
+    );
+
+    // preloadStreams handles concurrency limiting and per-stream error logging
+    await preloadStreams(streamsToCache);
+
+    logger.info(
+      `Successfully precached ${streamsToCache.length} stream(s) for ${id} (${type})`
+    );
   }
 }

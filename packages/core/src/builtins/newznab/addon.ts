@@ -8,12 +8,13 @@ import {
   TorrentWithSelectedFile,
 } from '../../debrid/index.js';
 import { SearchMetadata } from '../base/debrid.js';
-import { createHash } from 'crypto';
+import { hashNzbUrl } from '../../debrid/utils.js';
 import { BaseNabApi, SearchResultItem } from '../base/nab/api.js';
 import {
   BaseNabAddon,
   NabAddonConfigSchema,
   NabAddonConfig,
+  parseNabLanguages,
 } from '../base/nab/addon.js';
 import { BuiltinProxy, createProxy } from '../../proxy/index.js';
 import type { BuiltinServiceId } from '../../utils/index.js';
@@ -70,6 +71,7 @@ export class NewznabAddon extends BaseNabAddon<NewznabAddonConfig, NewznabApi> {
             constants.NZBDAV_SERVICE,
             constants.ALTMOUNT_SERVICE,
             constants.STREMIO_NNTP_SERVICE,
+            constants.STREMTHRU_NEWZ_SERVICE,
           ].includes(s.id)
       )
     ) {
@@ -155,40 +157,52 @@ export class NewznabAddon extends BaseNabAddon<NewznabAddonConfig, NewznabApi> {
     };
   }
 
-  protected async _searchNzbs(
-    parsedId: ParsedId,
-    metadata: SearchMetadata
-  ): Promise<NZB[]> {
+  protected async _searchNzbs(parsedId: ParsedId): Promise<NZB[]> {
+    const metadata = await this.getSearchMetadata();
     const { results, meta } = await this.performSearch(parsedId, metadata);
     const seenNzbs = new Set<string>();
 
     const nzbs: NZB[] = [];
     for (const result of results) {
-      const nzbUrl = this.getNzbUrl(result);
+      const enclosure = this.getEnclosure(result);
+      const nzbUrl = enclosure?.url;
       if (!nzbUrl) continue;
       if (seenNzbs.has(nzbUrl)) continue;
       seenNzbs.add(nzbUrl);
 
       const zyclopsHealth = result.newznab?.zyclopsHealth?.toString();
-      const md5 =
-        result.newznab?.infohash?.toString() ||
-        createHash('md5').update(nzbUrl).digest('hex');
+      const md5 = result.newznab?.infohash?.toString() || hashNzbUrl(nzbUrl);
+
+      let date = result.pubDate?.toString();
+      if (typeof result.newznab?.usenetdate === 'string') {
+        date = result.newznab.usenetdate;
+      }
       const age = Math.ceil(
-        Math.abs(new Date().getTime() - new Date(result.pubDate).getTime()) /
+        Math.abs(new Date().getTime() - new Date(date).getTime()) /
           (1000 * 60 * 60)
       );
-
+      const languages = [
+        ...(result.newznab?.language
+          ? parseNabLanguages(result.newznab.language)
+          : []),
+        ...(result.newznab?.subs ? parseNabLanguages(result.newznab.subs) : []),
+      ];
       const nzb: NZB = {
         confirmed: meta.searchType === 'id',
         hash: md5,
         nzb: nzbUrl,
         age: age,
         title: result.title,
-        indexer: result.newznab?.hydraIndexerName?.toString() ?? undefined,
+        indexer:
+          result.newznab?.hydraIndexerName?.toString() ??
+          meta.capabilities.server.title,
         size:
           result.size ??
-          (result.newznab?.size ? Number(result.newznab.size) : 0),
+          (result.newznab?.size ? Number(result.newznab.size) : undefined) ??
+          enclosure?.length ??
+          0,
         type: 'usenet',
+        ...(languages.length > 0 && { languages }),
       };
 
       if (zyclopsHealth) {
@@ -231,16 +245,13 @@ export class NewznabAddon extends BaseNabAddon<NewznabAddonConfig, NewznabApi> {
       }
       for (let i = 0; i < nzbs.length; i++) {
         nzbs[i].nzb = proxiedUrls[i];
-        nzbs[i].hash = createHash('md5').update(nzbs[i].nzb).digest('hex');
+        nzbs[i].hash = hashNzbUrl(nzbs[i].nzb);
       }
     }
     return nzbs;
   }
 
-  protected async _searchTorrents(
-    parsedId: ParsedId,
-    metadata: SearchMetadata
-  ): Promise<Torrent[]> {
+  protected async _searchTorrents(_parsedId: ParsedId): Promise<Torrent[]> {
     return [];
   }
 
@@ -267,8 +278,7 @@ export class NewznabAddon extends BaseNabAddon<NewznabAddonConfig, NewznabApi> {
     return stream;
   }
 
-  private getNzbUrl(result: any): string | undefined {
-    return result.enclosure.find((e: any) => e.type === 'application/x-nzb')
-      ?.url;
+  private getEnclosure(result: any) {
+    return result.enclosure.find((e: any) => e.type === 'application/x-nzb');
   }
 }

@@ -1,5 +1,6 @@
 import { PresetMetadata, PresetMinimalMetadata } from '../db/index.js';
 import { CometPreset } from './comet.js';
+import { MeteorPreset } from './meteor.js';
 import { CustomPreset } from './custom.js';
 import { MediaFusionPreset } from './mediafusion.js';
 import { StremthruStorePreset } from './stremthruStore.js';
@@ -63,12 +64,18 @@ import { ProwlarrPreset } from './prowlarr.js';
 import { JackettPreset } from './jackett.js';
 import { NZBHydraPreset } from './nzbhydra.js';
 import { KnabenPreset } from './knaben.js';
+import { LibraryPreset } from './library.js';
+import { EztvPreset } from './eztv.js';
 import { BitmagnetPreset } from './bitmagnet.js';
+import { BrazucaTorrentsPreset } from './brazucaTorrents.js';
 import { SootioPreset } from './sootio.js';
 import { TorrentGalaxyPreset } from './torrentGalaxy.js';
 import { UsenetStreamerPreset } from './usenetStreamer.js';
 import { NekoBtPreset } from './nekoBt.js';
 import { EasynewsSearchPreset } from './easynewsSearch.js';
+import { SeaDexPreset } from './seadex.js';
+import { StreamNZBPreset } from './streamnzb.js';
+import { Preset } from './index.js';
 
 let PRESET_LIST: string[] = [
   'custom',
@@ -77,14 +84,18 @@ let PRESET_LIST: string[] = [
   'aiostreams',
   'torrentio',
   'comet',
+  'meteor',
   'mediafusion',
   'stremthruTorz',
   'stremthruStore',
   'sootio',
   'zilean',
   'knaben',
+  'library',
+  'eztv',
   'torrent-galaxy',
   'bitmagnet',
+  'seadex',
   'animetosho',
   'neko-bt',
   'prowlarr',
@@ -105,10 +116,12 @@ let PRESET_LIST: string[] = [
   'easynewsPlusPlus',
   'easynews-search',
   'usenet-streamer',
+  'streamnzb',
   'dmm-cast',
   'nuvio-streams',
   'webstreamr',
   'astream',
+  'brazuca-torrents',
   'streamasia',
   'usa-tv',
   'argentina-tv',
@@ -148,7 +161,6 @@ export class PresetManager {
         NAME: metadata.NAME,
         LOGO: metadata.LOGO,
         DESCRIPTION: metadata.DESCRIPTION,
-        URL: metadata.URL,
         SUPPORTED_RESOURCES: metadata.SUPPORTED_RESOURCES,
         SUPPORTED_STREAM_TYPES: metadata.SUPPORTED_STREAM_TYPES,
         SUPPORTED_SERVICES: metadata.SUPPORTED_SERVICES,
@@ -160,7 +172,7 @@ export class PresetManager {
     );
   }
 
-  static fromId(id: string) {
+  static fromId(id: string): typeof Preset {
     switch (id) {
       case 'torrentio':
         return TorrentioPreset;
@@ -170,6 +182,8 @@ export class PresetManager {
         return StremthruTorzPreset;
       case 'comet':
         return CometPreset;
+      case 'meteor':
+        return MeteorPreset;
       case 'mediafusion':
         return MediaFusionPreset;
       case 'custom':
@@ -244,6 +258,8 @@ export class PresetManager {
         return USATVPreset;
       case 'argentina-tv':
         return ArgentinaTVPreset;
+      case 'brazuca-torrents':
+        return BrazucaTorrentsPreset;
       case 'opensubtitles-v3-plus':
         return OpenSubtitlesV3PlusPreset;
       case 'subsource':
@@ -286,8 +302,14 @@ export class PresetManager {
         return NZBHydraPreset;
       case 'knaben':
         return KnabenPreset;
+      case 'library':
+        return LibraryPreset;
+      case 'eztv':
+        return EztvPreset;
       case 'bitmagnet':
         return BitmagnetPreset;
+      case 'seadex':
+        return SeaDexPreset;
       case 'sootio':
         return SootioPreset;
       case 'torrent-galaxy':
@@ -296,6 +318,8 @@ export class PresetManager {
         return UsenetStreamerPreset;
       case 'easynews-search':
         return EasynewsSearchPreset;
+      case 'streamnzb':
+        return StreamNZBPreset;
       default:
         throw new Error(`Preset ${id} not found`);
     }
