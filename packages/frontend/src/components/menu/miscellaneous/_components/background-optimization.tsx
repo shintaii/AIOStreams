@@ -160,7 +160,6 @@ export function BackgroundOptimization() {
             </>
           }
           defaultValue={DEFAULT_PRELOAD_SELECTOR}
-          placeholder="e.g., slice(streams, 0, 5)"
           disabled={!userData.preloadStreams?.enabled}
           value={userData.preloadStreams?.selector ?? ''}
           onValueChange={(value) => {

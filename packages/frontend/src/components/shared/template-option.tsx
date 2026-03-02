@@ -93,7 +93,7 @@ const TemplateOption: React.FC<TemplateOptionProps> = ({
         <div>
           <PasswordInput
             label={name}
-            value={forcedValue ?? value ?? defaultValue}
+            value={forcedValue ?? value ?? defaultValue ?? ''}
             onValueChange={(value: string) =>
               onChange(emptyIsUndefined ? value || undefined : value)
             }
@@ -119,7 +119,7 @@ const TemplateOption: React.FC<TemplateOptionProps> = ({
         <div>
           <TextInput
             label={name}
-            value={forcedValue ?? value ?? defaultValue}
+            value={forcedValue ?? value ?? defaultValue ?? ''}
             onValueChange={(value: string) =>
               onChange(emptyIsUndefined ? value || undefined : value)
             }
@@ -143,7 +143,7 @@ const TemplateOption: React.FC<TemplateOptionProps> = ({
       return (
         <div>
           <NumberInput
-            value={forcedValue ?? value ?? defaultValue}
+            value={forcedValue ?? value ?? defaultValue ?? undefined}
             label={name}
             onValueChange={(value: number, valueAsString: string) =>
               onChange(isNaN(value) ? undefined : value)
@@ -268,7 +268,7 @@ const TemplateOption: React.FC<TemplateOptionProps> = ({
             <TextInput
               label="Custom"
               // The text input shows the custom value.
-              value={effectiveValue}
+              value={effectiveValue ?? ''}
               onValueChange={handleCustomInputChange}
               required={required}
               disabled={isDisabled}
@@ -324,7 +324,7 @@ const TemplateOption: React.FC<TemplateOptionProps> = ({
         <div>
           <TextInput
             label={name}
-            value={forcedValue ?? value ?? defaultValue}
+            value={forcedValue ?? value ?? defaultValue ?? ''}
             onValueChange={(value: string) =>
               onChange(emptyIsUndefined ? value || undefined : value)
             }
@@ -686,7 +686,7 @@ function NNTPServersInput({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <TextInput
                     label="Host"
-                    value={server.host}
+                    value={server.host ?? ''}
                     onValueChange={(v) => handleServerChange(index, 'host', v)}
                     placeholder="news.example.com"
                     required
@@ -701,7 +701,7 @@ function NNTPServersInput({
                   />
                   <TextInput
                     label="Username"
-                    value={server.username}
+                    value={server.username ?? ''}
                     onValueChange={(v) =>
                       handleServerChange(index, 'username', v)
                     }
@@ -710,7 +710,7 @@ function NNTPServersInput({
                   />
                   <PasswordInput
                     label="Password"
-                    value={server.password}
+                    value={server.password ?? ''}
                     onValueChange={(v) =>
                       handleServerChange(index, 'password', v)
                     }
