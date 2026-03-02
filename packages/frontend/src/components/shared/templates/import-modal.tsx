@@ -257,7 +257,7 @@ export function TemplateImportModal({
                         onConfirmImport(true, selectedPendingTemplateIndex)
                       }
                     >
-                      Use Selected Template
+                      Use Selected
                     </Button>
                   )}
                 </>

@@ -37,7 +37,7 @@ export function TemplateServiceSelectionStep({
         }
       />
 
-      <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
+      <div className="space-y-2 flex-1 min-h-0 overflow-y-auto pr-2">
         {processedTemplate.services.map((serviceId) => {
           const service =
             status?.settings?.services?.[

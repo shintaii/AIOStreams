@@ -46,7 +46,7 @@ export function TemplateInputsStep({
         className="w-full"
       />
 
-      <div className="space-y-3 max-h-[400px] overflow-y-auto pr-3">
+      <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-3">
         {visibleOptions.length === 0 ? (
           <div className="text-center py-6 text-gray-400 text-sm">
             No options available in simple mode. Switch to Advanced to see all

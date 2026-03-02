@@ -33,7 +33,7 @@ export function TemplateCredentialInputsStep({
         description="Enter your API keys and credentials below. Some addons may require additional setup in the Addons section after loading."
       />
 
-      <form className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+      <form className="space-y-3 flex-1 min-h-0 overflow-y-auto pr-2">
         {processedTemplate.inputs.length === 0 ? (
           <div className="text-center py-4 text-gray-400 text-sm">
             No inputs required for this template
