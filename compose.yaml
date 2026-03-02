@@ -1,6 +1,6 @@
 services:
   aiostreams:
-    image: ghcr.io/viren070/aiostreams:v2.24.5
+    image: ghcr.io/viren070/aiostreams:2026.03.02.1829-nightly
     container_name: aiostreams
     restart: unless-stopped
     sysctls:
